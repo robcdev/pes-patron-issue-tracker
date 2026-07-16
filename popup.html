@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="toolbar">
+    <span class="title">Screenshot to Folder</span>
+    <div class="actions">
+      <button id="tab-camera" class="icon-btn active" title="Take a screenshot">📷</button>
+      <button id="tab-settings" class="icon-btn" title="Settings">⚙️</button>
+    </div>
+  </header>
+
+  <!-- CAMERA VIEW -->
+  <section id="view-camera" class="view">
+    <label class="field-label" for="subpath">Subfolder (inside base folder)</label>
+    <input id="subpath" type="text" placeholder="the/rest/of/the/path" autocomplete="off" />
+    <label class="field-label" for="prefix">Filename prefix (optional)</label>
+    <input id="prefix" type="text" placeholder="e.g. login-page" autocomplete="off" />
+    <label class="field-label" for="url">URL</label>
+    <input id="url" type="text" placeholder="https://…" autocomplete="off" />
+    <label class="field-label" for="description">Issue description</label>
+    <textarea id="description" rows="2" placeholder="e.g. the meetings component does not display the time correctly"></textarea>
+    <label class="field-label" for="mini-prompt">Mini-prompt for Claude (optional)</label>
+    <textarea id="mini-prompt" rows="2" placeholder="e.g. make the field a little wider so the data fits"></textarea>
+    <label class="checkbox-row">
+      <input id="include-network" type="checkbox" />
+      <span>Include network data</span>
+    </label>
+    <p class="hint" id="target-hint">Saving to: <span id="target-preview">—</span></p>
+    <button id="take" class="primary">Take</button>
+    <p id="camera-status" class="status"></p>
+  </section>
+
+  <!-- SETTINGS VIEW -->
+  <section id="view-settings" class="view hidden">
+    <label class="field-label">Default base folder</label>
+    <div class="folder-row">
+      <input id="base-display" type="text" readonly placeholder="No folder chosen" />
+      <button id="choose-folder" class="secondary">Choose…</button>
+    </div>
+    <p class="hint">
+      Pick this once. Screenshots are saved into this folder, joined with the
+      subfolder you type on the camera tab.
+    </p>
+    <button id="forget-folder" class="link-btn">Forget folder</button>
+    <p id="settings-status" class="status"></p>
+  </section>
+
+  <script src="popup.js"></script>
+</body>
+</html>

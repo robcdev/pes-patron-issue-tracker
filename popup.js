@@ -20,6 +20,7 @@ const els = {
   includeNetwork: document.getElementById("include-network"),
   targetPreview: document.getElementById("target-preview"),
   take: document.getElementById("take"),
+  selectArea: document.getElementById("select-area"),
   cameraStatus: document.getElementById("camera-status"),
   baseDisplay: document.getElementById("base-display"),
   chooseFolder: document.getElementById("choose-folder"),
@@ -55,30 +56,10 @@ els.tabEdit.addEventListener("click", () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Filename helpers
+ * Filename helpers (sanitizePrefix / makeBasename live in lib.js)
  * ------------------------------------------------------------------ */
-function sanitizePrefix(p) {
-  return (p || "")
-    .trim()
-    .replace(/[\\/:*?"<>|]+/g, "-")
-    .replace(/\s+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-// Timestamped basename (no extension). Computed once per capture so the
-// .png and its .md sidecar always pair up.
-function buildBasename() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, "0");
-  const prefix = sanitizePrefix(els.prefix.value);
-  const stamp =
-    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` +
-    `_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
-  return prefix ? `${prefix}-${stamp}` : `screenshot-${stamp}`;
-}
-
 function timestampName() {
-  return buildBasename() + ".png";
+  return makeBasename(els.prefix.value) + ".png";
 }
 
 function hasMetadata() {
@@ -114,19 +95,7 @@ async function captureWithUrl(urlText) {
   canvas.height = img.height + barH;
   const ctx = canvas.getContext("2d");
 
-  // URL bar
-  ctx.fillStyle = "#202124";
-  ctx.fillRect(0, 0, canvas.width, barH);
-  ctx.fillStyle = "#e8eaed";
-  ctx.font = "16px -apple-system, Segoe UI, Roboto, sans-serif";
-  ctx.textBaseline = "middle";
-
-  const fullUrl = urlText || tab.url || "";
-  let url = fullUrl;
-  const maxW = canvas.width - 24;
-  while (url && ctx.measureText(url).width > maxW) url = url.slice(0, -2);
-  if (url !== fullUrl) url += "…";
-  ctx.fillText(url, 12, barH / 2 + 1);
+  paintUrlBar(ctx, canvas.width, barH, urlText || tab.url || "");
 
   // page below the bar
   ctx.drawImage(img, 0, barH);
@@ -161,20 +130,6 @@ async function collectNetworkData() {
     },
   });
   return (results && results[0] && results[0].result) || [];
-}
-
-/* ------------------------------------------------------------------ *
- * Write a blob into base/<subpath>/file, creating subfolders
- * ------------------------------------------------------------------ */
-async function writeInto(baseHandle, subpath, blob, filename) {
-  let dir = baseHandle;
-  for (const part of splitSubpath(subpath)) {
-    dir = await dir.getDirectoryHandle(part, { create: true });
-  }
-  const fileHandle = await dir.getFileHandle(filename, { create: true });
-  const writable = await fileHandle.createWritable();
-  await writable.write(blob);
-  await writable.close();
 }
 
 /* ------------------------------------------------------------------ *
@@ -250,7 +205,7 @@ els.take.addEventListener("click", async () => {
 
     const url = els.url.value.trim();
     const blob = await captureWithUrl(url);
-    const basename = buildBasename();
+    const basename = makeBasename(els.prefix.value);
     const filename = basename + ".png";
     await writeInto(baseHandle, els.subpath.value, blob, filename);
 
@@ -293,6 +248,63 @@ els.take.addEventListener("click", async () => {
     setStatus(els.cameraStatus, "Failed: " + (e.message || e), "err");
   } finally {
     els.take.disabled = false;
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * Select area: capture the viewport now, hand it to capture.html where
+ * the user drags a region to crop. (The popup closes the moment the page
+ * gets focus, so selection can't happen live inside the popup.)
+ * ------------------------------------------------------------------ */
+els.selectArea.addEventListener("click", async () => {
+  els.selectArea.disabled = true;
+  setStatus(els.cameraStatus, "Opening selector…", "info");
+  try {
+    const baseHandle = await idbGet(HANDLE_KEY);
+    if (!baseHandle) {
+      setStatus(
+        els.cameraStatus,
+        "No base folder set. Open ⚙️ Settings and choose one first.",
+        "err"
+      );
+      showView("settings");
+      els.selectArea.disabled = false;
+      return;
+    }
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) throw new Error("No active tab.");
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+      format: "png",
+    });
+    const blob = await (await fetch(dataUrl)).blob();
+
+    // Best-effort network capture, same as the full-page path.
+    let network = [];
+    if (els.includeNetwork.checked) {
+      try {
+        network = await collectNetworkData();
+      } catch (e) {
+        network = [];
+      }
+    }
+
+    await idbSet(PENDING_KEY, {
+      blob,
+      url: els.url.value.trim(),
+      subpath: els.subpath.value,
+      prefix: els.prefix.value,
+      description: els.description.value.trim(),
+      prompt: els.miniPrompt.value.trim(),
+      network,
+      baseName: baseHandle.name,
+    });
+
+    await chrome.tabs.create({ url: chrome.runtime.getURL("capture.html") });
+    window.close();
+  } catch (e) {
+    setStatus(els.cameraStatus, "Failed: " + (e.message || e), "err");
+    els.selectArea.disabled = false;
   }
 });
 

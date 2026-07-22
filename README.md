@@ -14,10 +14,14 @@ subfolder — no manual "save → find → copy → paste into the worktree" dan
   **Take** button. The subfolder is the part you change often; its last value
   is remembered so you don't retype it. Nested subfolders are created
   automatically if they don't exist.
-- On **Take**: the visible page is captured (`chrome.tabs.captureVisibleTab` —
-  browser tabs/toolbar are *not* in the image), the page URL is drawn as a bar
-  across the top, and the PNG is written to
-  `‹base folder›/‹subfolder›/‹prefix›-YYYY-MM-DD_HH-MM-SS.png`.
+- On **Take full page**: the visible page is captured
+  (`chrome.tabs.captureVisibleTab` — browser tabs/toolbar are *not* in the
+  image), the page URL is drawn as a bar across the top, and the PNG is written
+  to `‹base folder›/‹subfolder›/‹prefix›-YYYY-MM-DD_HH-MM-SS.png`.
+- On **Select area…**: the viewport is captured and opened in a crop page
+  (`capture.html`) where you drag a rectangle to pick a region, then **Save**.
+  Only that region is written (with the same URL bar, filename, fields and
+  sidecar as the full-page path). See [Region capture](#region-capture-select-area).
 
 ## Issue metadata (for Claude)
 
@@ -79,6 +83,25 @@ headers); status codes need Chrome 109+ and, for cross-origin requests, a
 made since the current page load; and the network capture is best-effort — if it
 fails, the screenshot and the rest of the sidecar are still saved. The table is
 capped at 200 rows.
+
+## Region capture (Select area…)
+
+Like macOS ⌘⇧4, but within a browser extension's limits. A popup **closes the
+moment you click the page**, and only a window (not a background worker) can
+reliably write to your chosen folder — so instead of a live on-page overlay, the
+flow is:
+
+1. Fill in the fields as usual and click **Select area…**.
+2. The extension captures the current viewport and opens a **crop page** in a new
+   tab with that screenshot frozen in place.
+3. **Drag a rectangle** over the part you want (the selection size in real pixels
+   is shown live); adjust the carried-over fields if needed.
+4. **Save section** — only the selected region is cropped, gets the URL bar, and
+   is written exactly like a full-page shot, including the `.md` sidecar (with any
+   captured network data) when a description or mini-prompt is present.
+
+The captured image and field values are handed to the crop page through
+IndexedDB, so nothing is lost when the popup closes.
 
 ## Managing references (✏️)
 

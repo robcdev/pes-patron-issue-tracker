@@ -10,6 +10,8 @@
 const DB_NAME = "stf-db";
 const STORE = "handles";
 const HANDLE_KEY = "baseFolder";
+// A region capture is handed from the popup to capture.html via this key.
+const PENDING_KEY = "pendingCapture";
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -74,6 +76,54 @@ async function getSubDir(baseHandle, subpath) {
     dir = await dir.getDirectoryHandle(part, { create: false });
   }
   return dir;
+}
+
+// Write a blob into base/<subpath>/filename, creating subfolders as needed.
+async function writeInto(baseHandle, subpath, blob, filename) {
+  let dir = baseHandle;
+  for (const part of splitSubpath(subpath)) {
+    dir = await dir.getDirectoryHandle(part, { create: true });
+  }
+  const fileHandle = await dir.getFileHandle(filename, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+}
+
+/* ---- Filenames ---- */
+function sanitizePrefix(p) {
+  return (p || "")
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+// Timestamped basename (no extension). Computed once per capture so the
+// .png and its .md sidecar always pair up.
+function makeBasename(prefixValue) {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const prefix = sanitizePrefix(prefixValue);
+  const stamp =
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` +
+    `_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+  return prefix ? `${prefix}-${stamp}` : `screenshot-${stamp}`;
+}
+
+/* ---- Draw the dark URL bar across the top of a canvas ---- */
+function paintUrlBar(ctx, width, barH, urlText) {
+  ctx.fillStyle = "#202124";
+  ctx.fillRect(0, 0, width, barH);
+  ctx.fillStyle = "#e8eaed";
+  ctx.font = "16px -apple-system, Segoe UI, Roboto, sans-serif";
+  ctx.textBaseline = "middle";
+  const full = urlText || "";
+  let url = full;
+  const maxW = width - 24;
+  while (url && ctx.measureText(url).width > maxW) url = url.slice(0, -2);
+  if (url !== full) url += "…";
+  ctx.fillText(url, 12, barH / 2 + 1);
 }
 
 /* ---- Timestamp ---- */

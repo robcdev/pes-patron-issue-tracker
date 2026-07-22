@@ -105,6 +105,15 @@ button.primary {
 button.primary:hover { background: #4338ca; }
 button.primary:disabled { background: #b9b9c9; cursor: default; }
 
+.button-row { display: flex; gap: 8px; }
+.button-row .primary { flex: 1; }
+button.primary.alt {
+  background: #eef0fb;
+  color: #4f46e5;
+}
+button.primary.alt:hover { background: #e2e5f8; }
+button.primary.alt:disabled { background: #eceef5; color: #b9b9c9; }
+
 button.secondary {
   padding: 8px 12px;
   border: 1px solid #d6d9e2;

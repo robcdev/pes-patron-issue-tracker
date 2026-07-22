@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>References — Screenshot to Folder</title>
+  <link rel="stylesheet" href="references.css" />
+</head>
+<body>
+  <header class="page-header">
+    <div class="page-header-inner">
+      <h1>Screenshot references</h1>
+      <div class="folder-bar">
+        <span class="folder-base" id="base-name">—</span>
+        <span class="folder-sep">/</span>
+        <input id="subpath" type="text" placeholder="subfolder/inside/base" autocomplete="off" />
+        <button id="load" class="secondary">Load</button>
+        <button id="refresh" class="secondary">Refresh</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page-main">
+    <div id="grant" class="notice hidden">
+      <p>This tab needs permission to read the base folder.</p>
+      <button id="grant-btn" class="primary">Grant folder access</button>
+    </div>
+
+    <p id="status" class="status"></p>
+    <div id="grid" class="grid"></div>
+  </main>
+
+  <!-- EDIT MODAL -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <span id="modal-title" class="modal-title">reference.png</span>
+        <button id="modal-cancel" class="icon-btn" title="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-preview">
+          <img id="modal-thumb" alt="reference preview" />
+        </div>
+        <div class="modal-fields">
+          <label class="field-label" for="m-url">URL</label>
+          <input id="m-url" type="text" autocomplete="off" />
+          <label class="field-label" for="m-description">Issue description</label>
+          <textarea id="m-description" rows="3"></textarea>
+          <label class="field-label" for="m-prompt">Mini-prompt for Claude (optional)</label>
+          <textarea id="m-prompt" rows="3"></textarea>
+          <p id="modal-network" class="modal-network"></p>
+          <div class="modal-actions">
+            <button id="modal-save" class="primary">Save</button>
+            <button id="modal-delete" class="danger-btn">Delete reference</button>
+          </div>
+          <p id="modal-status" class="status"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="lib.js"></script>
+  <script src="references.js"></script>
+</body>
+</html>

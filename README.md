@@ -80,6 +80,30 @@ made since the current page load; and the network capture is best-effort — if 
 fails, the screenshot and the rest of the sidecar are still saved. The table is
 capped at 200 rows.
 
+## Managing references (✏️)
+
+The **✏️** button in the popup opens a full **references page in its own browser
+tab** (`references.html`). It shows every screenshot in a folder as a responsive
+grid of previews, each tagged with whether it has details / network data.
+
+- The page opens on the popup's current **subfolder**; you can type a different
+  subfolder in the header bar and hit **Load** (or Enter) to browse elsewhere
+  under the same base folder, and **Refresh** to re-scan.
+- **Click any card** to open the editor: a large preview beside the editable
+  fields (URL, issue description, mini-prompt). **Save** rewrites the `.md`
+  sidecar in place — any captured `## Network` section is preserved untouched,
+  and clearing all fields removes the sidecar. **Delete reference** removes the
+  screenshot *and* its `.md` sidecar together (after a confirmation).
+- The first time the page opens after a browser restart it asks you to **Grant
+  folder access** (Chrome re-confirming read/write to the chosen folder).
+
+Editing round-trips reliably thanks to a small `<!-- stf-meta: … -->` block
+appended to each sidecar — invisible in rendered Markdown, authoritative when the
+editor re-opens the file.
+
+The popup and the references page share their code (`lib.js`) and the same stored
+base-folder handle, so no re-picking is needed.
+
 ## Why pick-a-folder instead of typing a path
 
 Chrome extensions cannot write to an arbitrary typed absolute path — the

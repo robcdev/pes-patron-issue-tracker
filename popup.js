@@ -1,57 +1,14 @@
 "use strict";
 
-/* ------------------------------------------------------------------ *
- * Small IndexedDB helper — FileSystemDirectoryHandle can be stored in
- * IndexedDB (structured-clone), but NOT in chrome.storage.
- * ------------------------------------------------------------------ */
-const DB_NAME = "stf-db";
-const STORE = "handles";
-const HANDLE_KEY = "baseFolder";
-
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function idbSet(key, value) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).put(value, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-async function idbGet(key) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readonly");
-    const req = tx.objectStore(STORE).get(key);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function idbDel(key) {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).delete(key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
+/* Shared helpers (idb*, splitSubpath, ensurePermission, nowStamp,
+ * buildMetadataMarkdown, …) come from lib.js, loaded first. */
 
 /* ------------------------------------------------------------------ *
  * Elements
  * ------------------------------------------------------------------ */
 const els = {
   tabCamera: document.getElementById("tab-camera"),
+  tabEdit: document.getElementById("tab-edit"),
   tabSettings: document.getElementById("tab-settings"),
   viewCamera: document.getElementById("view-camera"),
   viewSettings: document.getElementById("view-settings"),
@@ -76,7 +33,8 @@ function setStatus(el, msg, kind) {
 }
 
 /* ------------------------------------------------------------------ *
- * View switching
+ * View switching (camera / settings). The ✏️ button opens the
+ * references manager in its own browser tab instead of a view.
  * ------------------------------------------------------------------ */
 function showView(name) {
   const camera = name === "camera";
@@ -88,18 +46,17 @@ function showView(name) {
 els.tabCamera.addEventListener("click", () => showView("camera"));
 els.tabSettings.addEventListener("click", () => showView("settings"));
 
-/* ------------------------------------------------------------------ *
- * Path helpers
- * ------------------------------------------------------------------ */
-function splitSubpath(sub) {
-  return (sub || "")
-    .replace(/\\/g, "/")
-    .split("/")
-    .map((s) => s.trim())
-    .filter((s) => s && s !== "." && s !== "..");
-}
+els.tabEdit.addEventListener("click", () => {
+  // Pass the current subfolder so the page opens on the same location.
+  const sub = encodeURIComponent(els.subpath.value || "");
+  chrome.tabs.create({
+    url: chrome.runtime.getURL("references.html") + "?sub=" + sub,
+  });
+});
 
-// Strip characters that aren't safe/clean in a filename.
+/* ------------------------------------------------------------------ *
+ * Filename helpers
+ * ------------------------------------------------------------------ */
 function sanitizePrefix(p) {
   return (p || "")
     .trim()
@@ -108,8 +65,8 @@ function sanitizePrefix(p) {
     .replace(/^-+|-+$/g, "");
 }
 
-// Timestamped basename (no extension), e.g. "login-page-2026-07-15_10-00-05".
-// Computed once per capture so the .png and .md sidecar always pair up.
+// Timestamped basename (no extension). Computed once per capture so the
+// .png and its .md sidecar always pair up.
 function buildBasename() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, "0");
@@ -134,16 +91,6 @@ function updatePreview() {
   const joined = parts.length ? base + "/" + parts.join("/") : base;
   els.targetPreview.textContent =
     joined + "/" + timestampName() + (hasMetadata() ? "  (+ .md)" : "");
-}
-
-/* ------------------------------------------------------------------ *
- * Permission handling for a stored directory handle
- * ------------------------------------------------------------------ */
-async function ensurePermission(handle) {
-  const opts = { mode: "readwrite" };
-  if ((await handle.queryPermission(opts)) === "granted") return true;
-  if ((await handle.requestPermission(opts)) === "granted") return true;
-  return false;
 }
 
 /* ------------------------------------------------------------------ *
@@ -190,10 +137,7 @@ async function captureWithUrl(urlText) {
 }
 
 /* ------------------------------------------------------------------ *
- * Collect network activity from the active tab via the page's Resource
- * Timing API. This is what the DevTools waterfall is built on: every
- * request since the current page load, with URL / type / size / duration
- * and (modern Chrome) status code. No request/response bodies.
+ * Collect network activity from the active tab via Resource Timing.
  * ------------------------------------------------------------------ */
 async function collectNetworkData() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -219,68 +163,8 @@ async function collectNetworkData() {
   return (results && results[0] && results[0].result) || [];
 }
 
-function fmtBytes(n) {
-  if (!n) return "—";
-  if (n < 1024) return n + " B";
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
-  return (n / 1024 / 1024).toFixed(2) + " MB";
-}
-
-// Keep the sidecar from ballooning on request-heavy pages.
-const MAX_NETWORK_ROWS = 200;
-
-function networkMarkdown(network) {
-  if (!network || !network.length) return [];
-  const rows = network.slice(0, MAX_NETWORK_ROWS);
-  const failed = network.filter((r) => r.status && r.status >= 400).length;
-
-  const head = `## Network (${network.length} request${
-    network.length === 1 ? "" : "s"
-  } via Resource Timing${failed ? `, ${failed} failed` : ""})`;
-
-  const lines = [
-    head,
-    "",
-    "| status | type | size | ms | url |",
-    "| --- | --- | --- | --- | --- |",
-  ];
-  for (const r of rows) {
-    const url = String(r.url || "").replace(/\|/g, "%7C");
-    lines.push(
-      `| ${r.status ?? "—"} | ${r.type || "—"} | ${fmtBytes(r.size)} | ${
-        r.ms
-      } | ${url} |`
-    );
-  }
-  if (network.length > rows.length) {
-    lines.push("", `_…and ${network.length - rows.length} more request(s)._`);
-  }
-  lines.push("");
-  return lines;
-}
-
 /* ------------------------------------------------------------------ *
- * Build the Markdown sidecar Claude reads alongside the screenshot
- * ------------------------------------------------------------------ */
-function buildMetadataMarkdown({ pngName, description, prompt, url, network }) {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, "0");
-  const captured =
-    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
-    `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-
-  const title = (description || "Screenshot").split("\n")[0].slice(0, 80);
-  const lines = [`# Issue: ${title}`, "", `![screenshot](${pngName})`, ""];
-  if (description) lines.push(`**Description:** ${description}`, "");
-  if (prompt) lines.push(`**Prompt:** ${prompt}`, "");
-  if (url) lines.push(`**URL:** ${url}`);
-  lines.push(`**Captured:** ${captured}`, "");
-  lines.push(...networkMarkdown(network));
-  return lines.join("\n");
-}
-
-/* ------------------------------------------------------------------ *
- * Write a blob into base/<subpath>/file.png, creating subfolders
+ * Write a blob into base/<subpath>/file, creating subfolders
  * ------------------------------------------------------------------ */
 async function writeInto(baseHandle, subpath, blob, filename) {
   let dir = baseHandle;
@@ -319,7 +203,7 @@ els.forgetFolder.addEventListener("click", async () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Camera: take screenshot
+ * Camera: field listeners + take screenshot
  * ------------------------------------------------------------------ */
 els.subpath.addEventListener("input", () => {
   updatePreview();
@@ -336,7 +220,7 @@ els.prefix.addEventListener("input", () => {
 els.description.addEventListener("input", updatePreview);
 els.miniPrompt.addEventListener("input", updatePreview);
 
-// The "include network data" choice is a remembered preference (default on).
+// The "include network data" choice is a remembered preference (default off).
 els.includeNetwork.addEventListener("change", () => {
   chrome.storage.local.set({ includeNetwork: els.includeNetwork.checked });
 });

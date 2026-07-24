@@ -105,6 +105,25 @@ button.primary {
 button.primary:hover { background: #4338ca; }
 button.primary:disabled { background: #b9b9c9; cursor: default; }
 
+.region-preview {
+  margin: 6px 0 10px;
+  padding: 8px;
+  border: 1px solid #e3e5ee;
+  border-radius: 10px;
+  background: #f8f9fc;
+}
+.region-preview img {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid #eef0f6;
+  border-radius: 6px;
+  margin: 4px 0;
+}
+.region-preview .primary { width: 100%; margin-top: 4px; }
+
 .button-row { display: flex; gap: 8px; }
 .button-row .primary { flex: 1; }
 button.primary.alt {

@@ -10,8 +10,10 @@
 const DB_NAME = "stf-db";
 const STORE = "handles";
 const HANDLE_KEY = "baseFolder";
-// A region capture is handed from the popup to capture.html via this key.
+// A confirmed region capture waiting for the popup to save it.
 const PENDING_KEY = "pendingCapture";
+// A region capture awaiting Confirm/Cancel in the on-page preview modal.
+const REGION_TEMP_KEY = "pendingRegionTemp";
 
 function openDB() {
   return new Promise((resolve, reject) => {

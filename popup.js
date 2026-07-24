@@ -19,6 +19,10 @@ const els = {
   miniPrompt: document.getElementById("mini-prompt"),
   includeNetwork: document.getElementById("include-network"),
   targetPreview: document.getElementById("target-preview"),
+  regionPreview: document.getElementById("region-preview"),
+  regionThumb: document.getElementById("region-thumb"),
+  saveArea: document.getElementById("save-area"),
+  discardRegion: document.getElementById("discard-region"),
   take: document.getElementById("take"),
   selectArea: document.getElementById("select-area"),
   cameraStatus: document.getElementById("camera-status"),
@@ -75,34 +79,16 @@ function updatePreview() {
 }
 
 /* ------------------------------------------------------------------ *
- * Capture + draw URL bar onto the image
+ * Capture the raw visible viewport (no URL bar — that's baked on at save
+ * time, so the URL field stays editable until then).
  * ------------------------------------------------------------------ */
-async function captureWithUrl(urlText) {
+async function captureViewport() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) throw new Error("No active tab.");
-
   const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
     format: "png",
   });
-
-  const img = new Image();
-  img.src = dataUrl;
-  await img.decode();
-
-  const barH = 34;
-  const canvas = document.createElement("canvas");
-  canvas.width = img.width;
-  canvas.height = img.height + barH;
-  const ctx = canvas.getContext("2d");
-
-  paintUrlBar(ctx, canvas.width, barH, urlText || tab.url || "");
-
-  // page below the bar
-  ctx.drawImage(img, 0, barH);
-
-  return new Promise((resolve) =>
-    canvas.toBlob((b) => resolve(b), "image/png")
-  );
+  return (await fetch(dataUrl)).blob();
 }
 
 /* ------------------------------------------------------------------ *
@@ -180,70 +166,144 @@ els.includeNetwork.addEventListener("change", () => {
   chrome.storage.local.set({ includeNetwork: els.includeNetwork.checked });
 });
 
+// The pending (captured-but-unsaved) screenshot: its blob, preview URL, the
+// network data captured with it, and where it came from ("area" | "full").
+let pendingRegionBlob = null;
+let regionThumbUrl = null;
+let pendingNetwork = [];
+let pendingSource = null;
+
+// Show the preview + Save button whenever a shot is pending. "Take full page"
+// and "Select area…" are always available (they replace the pending shot);
+// the selector reads "Retake area" only after an area selection.
+function setMode() {
+  const pending = Boolean(pendingRegionBlob);
+  els.selectArea.textContent = pendingSource === "area" ? "Retake area" : "Select area…";
+  els.regionPreview.classList.toggle("hidden", !pending);
+}
+
+async function writeShot(baseHandle, blob, network) {
+  const url = els.url.value.trim();
+  const basename = makeBasename(els.prefix.value);
+  const filename = basename + ".png";
+  await writeInto(baseHandle, els.subpath.value, blob, filename);
+
+  // Write the Claude-readable sidecar only when there's metadata to save.
+  const description = els.description.value.trim();
+  const prompt = els.miniPrompt.value.trim();
+  let savedNote = filename;
+  if (description || prompt) {
+    const mdName = basename + ".md";
+    const md = buildMetadataMarkdown({
+      pngName: filename,
+      description,
+      prompt,
+      url,
+      network: network || [],
+    });
+    await writeInto(
+      baseHandle,
+      els.subpath.value,
+      new Blob([md], { type: "text/markdown" }),
+      mdName
+    );
+    savedNote = `${filename} + ${mdName}`;
+  }
+
+  const parts = splitSubpath(els.subpath.value);
+  const where = (parts.length ? parts.join("/") + "/" : "") + savedNote;
+  return { baseName: baseHandle.name, where };
+}
+
+// Make `blob` the pending screenshot: show it in the preview and drop any
+// previously persisted region. Nothing is written until Save.
+async function setPending(blob, network, source) {
+  try {
+    await idbDel(PENDING_KEY);
+  } catch (e) {
+    /* ignore */
+  }
+  await chrome.storage.local.remove("pendingFields");
+  chrome.runtime.sendMessage({ type: "stf-clear-badge" }).catch(() => {});
+  if (regionThumbUrl) URL.revokeObjectURL(regionThumbUrl);
+  pendingRegionBlob = blob;
+  pendingNetwork = network || [];
+  pendingSource = source;
+  regionThumbUrl = URL.createObjectURL(blob);
+  els.regionThumb.src = regionThumbUrl;
+  setMode();
+  updatePreview();
+}
+
+// Capture the whole viewport into the preview (does NOT save).
+async function captureFullPage() {
+  const blob = await captureViewport();
+  let network = [];
+  if (els.includeNetwork.checked) {
+    try {
+      network = await collectNetworkData();
+    } catch (e) {
+      network = [];
+    }
+  }
+  await setPending(blob, network, "full");
+  setStatus(els.cameraStatus, "Full page captured — review and click Save.", "info");
+}
+
+async function saveArea() {
+  const baseHandle = await idbGet(HANDLE_KEY);
+  if (!baseHandle) {
+    setStatus(els.cameraStatus, "No base folder set. Open ⚙️ Settings first.", "err");
+    showView("settings");
+    return;
+  }
+  if (!(await ensurePermission(baseHandle))) {
+    setStatus(els.cameraStatus, "Permission to write to the folder was denied.", "err");
+    return;
+  }
+
+  // Bake the URL bar onto the cropped region (same look as full-page shots).
+  const img = new Image();
+  img.src = regionThumbUrl;
+  await img.decode();
+  const barH = 34;
+  const canvas = document.createElement("canvas");
+  canvas.width = img.width;
+  canvas.height = img.height + barH;
+  const ctx = canvas.getContext("2d");
+  paintUrlBar(ctx, canvas.width, barH, els.url.value.trim());
+  ctx.drawImage(img, 0, barH);
+  const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+
+  const { baseName, where } = await writeShot(baseHandle, blob, pendingNetwork);
+  await clearPendingRegion();
+  els.description.value = "";
+  els.miniPrompt.value = "";
+  updatePreview();
+  setStatus(els.cameraStatus, `Saved ✓  ${baseName}/${where}`, "ok");
+}
+
+async function clearPendingRegion() {
+  try {
+    await idbDel(PENDING_KEY);
+  } catch (e) {
+    /* ignore */
+  }
+  await chrome.storage.local.remove("pendingFields");
+  chrome.runtime.sendMessage({ type: "stf-clear-badge" }).catch(() => {});
+  if (regionThumbUrl) URL.revokeObjectURL(regionThumbUrl);
+  regionThumbUrl = null;
+  pendingRegionBlob = null;
+  pendingNetwork = [];
+  pendingSource = null;
+  setMode();
+}
+
 els.take.addEventListener("click", async () => {
   els.take.disabled = true;
   setStatus(els.cameraStatus, "Capturing…", "info");
   try {
-    const baseHandle = await idbGet(HANDLE_KEY);
-    if (!baseHandle) {
-      setStatus(
-        els.cameraStatus,
-        "No base folder set. Open ⚙️ Settings and choose one first.",
-        "err"
-      );
-      showView("settings");
-      return;
-    }
-    if (!(await ensurePermission(baseHandle))) {
-      setStatus(
-        els.cameraStatus,
-        "Permission to write to the folder was denied.",
-        "err"
-      );
-      return;
-    }
-
-    const url = els.url.value.trim();
-    const blob = await captureWithUrl(url);
-    const basename = makeBasename(els.prefix.value);
-    const filename = basename + ".png";
-    await writeInto(baseHandle, els.subpath.value, blob, filename);
-
-    // Write the Claude-readable sidecar only when there's metadata to save.
-    const description = els.description.value.trim();
-    const prompt = els.miniPrompt.value.trim();
-    let savedNote = filename;
-    if (description || prompt) {
-      // Network capture is best-effort — never let it block the save.
-      let network = [];
-      if (els.includeNetwork.checked) {
-        try {
-          network = await collectNetworkData();
-        } catch (e) {
-          network = [];
-        }
-      }
-
-      const mdName = basename + ".md";
-      const md = buildMetadataMarkdown({
-        pngName: filename,
-        description,
-        prompt,
-        url,
-        network,
-      });
-      const mdBlob = new Blob([md], { type: "text/markdown" });
-      await writeInto(baseHandle, els.subpath.value, mdBlob, mdName);
-      savedNote = `${filename} + ${mdName}`;
-      // Clear per-issue fields after a successful capture.
-      els.description.value = "";
-      els.miniPrompt.value = "";
-      updatePreview();
-    }
-
-    const parts = splitSubpath(els.subpath.value);
-    const where = (parts.length ? parts.join("/") + "/" : "") + savedNote;
-    setStatus(els.cameraStatus, `Saved ✓  ${baseHandle.name}/${where}`, "ok");
+    await captureFullPage();
   } catch (e) {
     setStatus(els.cameraStatus, "Failed: " + (e.message || e), "err");
   } finally {
@@ -251,10 +311,28 @@ els.take.addEventListener("click", async () => {
   }
 });
 
+els.saveArea.addEventListener("click", async () => {
+  els.saveArea.disabled = true;
+  setStatus(els.cameraStatus, "Saving…", "info");
+  try {
+    await saveArea();
+  } catch (e) {
+    setStatus(els.cameraStatus, "Failed: " + (e.message || e), "err");
+  } finally {
+    els.saveArea.disabled = false;
+  }
+});
+
+els.discardRegion.addEventListener("click", async () => {
+  await clearPendingRegion();
+  updatePreview();
+  setStatus(els.cameraStatus, "Discarded.", "info");
+});
+
 /* ------------------------------------------------------------------ *
- * Select area: capture the viewport now, hand it to capture.html where
- * the user drags a region to crop. (The popup closes the moment the page
- * gets focus, so selection can't happen live inside the popup.)
+ * Select area: persist the fields, inject the live selection overlay
+ * into the active tab, and close. The overlay + background worker capture
+ * the region; the confirmed result is picked up when the popup reopens.
  * ------------------------------------------------------------------ */
 els.selectArea.addEventListener("click", async () => {
   els.selectArea.disabled = true;
@@ -262,24 +340,21 @@ els.selectArea.addEventListener("click", async () => {
   try {
     const baseHandle = await idbGet(HANDLE_KEY);
     if (!baseHandle) {
-      setStatus(
-        els.cameraStatus,
-        "No base folder set. Open ⚙️ Settings and choose one first.",
-        "err"
-      );
+      setStatus(els.cameraStatus, "No base folder set. Open ⚙️ Settings first.", "err");
       showView("settings");
       els.selectArea.disabled = false;
       return;
     }
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) throw new Error("No active tab.");
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-      format: "png",
-    });
-    const blob = await (await fetch(dataUrl)).blob();
+    if (!tab || tab.id == null) throw new Error("No active tab.");
+    if (/^(chrome|edge|about|chrome-extension|https:\/\/chrome\.google\.com\/webstore)/.test(tab.url || "")) {
+      setStatus(els.cameraStatus, "Can't select on this page (browser/internal page).", "err");
+      els.selectArea.disabled = false;
+      return;
+    }
 
-    // Best-effort network capture, same as the full-page path.
+    // Best-effort network capture now (page is active), carried to save time.
     let network = [];
     if (els.includeNetwork.checked) {
       try {
@@ -289,18 +364,25 @@ els.selectArea.addEventListener("click", async () => {
       }
     }
 
-    await idbSet(PENDING_KEY, {
-      blob,
-      url: els.url.value.trim(),
-      subpath: els.subpath.value,
-      prefix: els.prefix.value,
-      description: els.description.value.trim(),
-      prompt: els.miniPrompt.value.trim(),
-      network,
-      baseName: baseHandle.name,
+    // Persist all fields so they're restored when the popup reopens.
+    await chrome.storage.local.set({
+      pendingFields: {
+        subpath: els.subpath.value,
+        prefix: els.prefix.value,
+        url: els.url.value.trim(),
+        description: els.description.value.trim(),
+        prompt: els.miniPrompt.value.trim(),
+        includeNetwork: els.includeNetwork.checked,
+        network,
+      },
     });
+    // Start fresh: drop any previously confirmed region.
+    await idbDel(PENDING_KEY);
 
-    await chrome.tabs.create({ url: chrome.runtime.getURL("capture.html") });
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["overlay.js"],
+    });
     window.close();
   } catch (e) {
     setStatus(els.cameraStatus, "Failed: " + (e.message || e), "err");
@@ -325,19 +407,41 @@ els.selectArea.addEventListener("click", async () => {
   // Default off when never set; otherwise honour the saved choice.
   els.includeNetwork.checked = includeNetwork === true;
 
-  // Auto-detect the current tab's URL. Editable, and used for both the
-  // baked-in URL bar and the sidecar. Not persisted — always reflects the
-  // tab the popup was opened on.
-  try {
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
-    if (tab && tab.url) els.url.value = tab.url;
-  } catch (e) {
-    /* leave the field blank if the tab can't be read */
+  // If we're returning from a "Select area" round trip, restore every field
+  // exactly as it was and pick up the confirmed region (if any).
+  const { pendingFields } = await chrome.storage.local.get(["pendingFields"]);
+  const pendingRegion = await idbGet(PENDING_KEY);
+
+  if (pendingFields) {
+    els.subpath.value = pendingFields.subpath || "";
+    els.prefix.value = pendingFields.prefix || "";
+    els.url.value = pendingFields.url || "";
+    els.description.value = pendingFields.description || "";
+    els.miniPrompt.value = pendingFields.prompt || "";
+    els.includeNetwork.checked = pendingFields.includeNetwork === true;
+    pendingNetwork = pendingFields.network || [];
+  } else {
+    // Auto-detect the current tab's URL (editable). Only when not restoring.
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab && tab.url) els.url.value = tab.url;
+    } catch (e) {
+      /* leave the field blank if the tab can't be read */
+    }
   }
 
+  if (pendingRegion && pendingRegion.blob) {
+    pendingRegionBlob = pendingRegion.blob;
+    pendingSource = "area";
+    regionThumbUrl = URL.createObjectURL(pendingRegion.blob);
+    els.regionThumb.src = regionThumbUrl;
+  } else if (pendingFields) {
+    // Fields were saved but no region confirmed (cancelled/aborted) — tidy up.
+    await chrome.storage.local.remove("pendingFields");
+    chrome.runtime.sendMessage({ type: "stf-clear-badge" }).catch(() => {});
+  }
+
+  setMode();
   updatePreview();
   showView("camera");
 })();

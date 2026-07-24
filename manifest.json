@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "description": "Capture the visible page (with its URL baked in) and save it straight into a chosen base folder + a frequently-edited subpath.",
   "permissions": ["activeTab", "tabs", "storage", "scripting"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "Screenshot to Folder"

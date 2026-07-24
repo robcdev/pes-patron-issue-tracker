@@ -10,18 +10,20 @@ subfolder — no manual "save → find → copy → paste into the worktree" dan
   The choice is remembered across browser restarts (stored as a
   `FileSystemDirectoryHandle` in IndexedDB). This is your stable root, e.g.
   `/Users/roberth/Documents/dev/spaceti`.
-- **Camera (📷)** — a **subfolder** field (e.g. `worktree-x/reference`) plus a
-  **Take** button. The subfolder is the part you change often; its last value
-  is remembered so you don't retype it. Nested subfolders are created
+- **Camera (📷)** — a **subfolder** field (e.g. `worktree-x/reference`) plus the
+  capture/save buttons. The subfolder is the part you change often; its last
+  value is remembered so you don't retype it. Nested subfolders are created
   automatically if they don't exist.
-- On **Take full page**: the visible page is captured
-  (`chrome.tabs.captureVisibleTab` — browser tabs/toolbar are *not* in the
-  image), the page URL is drawn as a bar across the top, and the PNG is written
-  to `‹base folder›/‹subfolder›/‹prefix›-YYYY-MM-DD_HH-MM-SS.png`.
-- On **Select area…**: the viewport is captured and opened in a crop page
-  (`capture.html`) where you drag a rectangle to pick a region, then **Save**.
-  Only that region is written (with the same URL bar, filename, fields and
-  sidecar as the full-page path). See [Region capture](#region-capture-select-area).
+- **Capture then save.** Both **Take full page** and **Select area…** *capture*
+  a screenshot into a **preview** — nothing is written yet. **Take full page**
+  grabs the visible viewport (`chrome.tabs.captureVisibleTab` — browser
+  tabs/toolbar are *not* in the image); **Select area…** lets you drag a region
+  on the live page (see [Region capture](#region-capture-select-area)).
+- **Save** writes the previewed screenshot together with the *current* field
+  state (URL, description, mini-prompt, …). The page URL is drawn as a bar across
+  the top and the PNG is written to
+  `‹base folder›/‹subfolder›/‹prefix›-YYYY-MM-DD_HH-MM-SS.png`. **Discard** clears
+  the preview. Re-capturing (either button) replaces the preview.
 
 ## Issue metadata (for Claude)
 
@@ -31,7 +33,7 @@ URL bar baked into the image and for the `url` line in the sidecar below.
 
 The tab also has two optional fields — **Issue description** and
 **Mini-prompt for Claude** (the "issue" can be a bug *or* a feature request).
-When either is filled in, **Take** writes a Markdown sidecar next to the
+When either is filled in, **Save** writes a Markdown sidecar next to the
 screenshot, sharing the same basename:
 
 ```
@@ -57,7 +59,7 @@ follows the `![screenshot](…)` link to the image:
 ```
 
 These two fields are **per-issue**: they're not remembered between captures and are
-cleared after a successful **Take** (the subfolder and prefix still persist). If
+cleared after a successful **Save** (the subfolder and prefix still persist). If
 both are left blank, only the PNG is written.
 
 ### Network data
@@ -86,22 +88,38 @@ capped at 200 rows.
 
 ## Region capture (Select area…)
 
-Like macOS ⌘⇧4, but within a browser extension's limits. A popup **closes the
-moment you click the page**, and only a window (not a background worker) can
-reliably write to your chosen folder — so instead of a live on-page overlay, the
-flow is:
+A live on-page selection, like macOS ⌘⇧4:
 
-1. Fill in the fields as usual and click **Select area…**.
-2. The extension captures the current viewport and opens a **crop page** in a new
-   tab with that screenshot frozen in place.
-3. **Drag a rectangle** over the part you want (the selection size in real pixels
-   is shown live); adjust the carried-over fields if needed.
-4. **Save section** — only the selected region is cropped, gets the URL bar, and
-   is written exactly like a full-page shot, including the `.md` sidecar (with any
-   captured network data) when a description or mini-prompt is present.
+1. Fill in the fields and click **Select area…**. The popup closes and a
+   crosshair overlay appears **on the current page** (your field values are
+   remembered). Press **Esc** to cancel.
+2. **Drag a rectangle** over the region you want. On release, the live page is
+   captured at that moment and a **preview modal** shows the crop with
+   **Confirm** / **Cancel**.
+3. **Confirm** stores that region as the pending screenshot. Reopen the
+   extension (its icon shows a badge): the **preview appears above the
+   "Saving to:" path**, with a **Save** button beside it.
+4. **Save** writes it exactly like a full-page shot — URL bar baked on, plus the
+   `.md` sidecar (with any network data captured at selection time) when a
+   description or mini-prompt is present. **Discard** clears the preview, and
+   **Retake area** starts a new selection.
 
-The captured image and field values are handed to the crop page through
-IndexedDB, so nothing is lost when the popup closes.
+**Take full page** stays available at all times, so you never have to make a
+selection when you just want the whole viewport — it also fills the preview and
+is written only when you click **Save**.
+
+### How it works (extension constraints)
+
+A popup **closes the instant the page gets focus**, and only a window context can
+reliably write to your chosen folder — so the work is split:
+
+- **`overlay.js`** is injected into the tab to draw the selection and the
+  Confirm/Cancel preview (styled via inline properties and a `<canvas>`, so it
+  works under strict page CSPs).
+- **`background.js`** (service worker) is the only context that can
+  `captureVisibleTab` once the popup is gone; it captures and crops the region.
+- The confirmed crop is stashed in IndexedDB and the fields in `chrome.storage`,
+  so the popup restores everything and does the actual save when you reopen it.
 
 ## Managing references (✏️)
 

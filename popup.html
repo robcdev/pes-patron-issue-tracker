@@ -30,13 +30,20 @@
       <input id="include-network" type="checkbox" />
       <span>Include network data</span>
     </label>
+    <div id="committed-list" class="committed-list hidden"></div>
+
     <div id="region-preview" class="region-preview hidden">
       <span class="field-label">Screenshot to save</span>
       <img id="region-thumb" alt="captured screenshot preview" />
-      <button id="save-area" class="primary">Save</button>
+      <button id="add-screenshot" class="primary alt">Add screenshot</button>
       <button id="discard-region" class="link-btn">Discard</button>
     </div>
+
     <p class="hint" id="target-hint">Saving to: <span id="target-preview">—</span></p>
+
+    <button id="save-all" class="primary" disabled>Save</button>
+    <button id="clear-all" class="link-btn hidden">Clear all screenshots</button>
+
     <div class="button-row">
       <button id="take" class="primary">Take full page</button>
       <button id="select-area" class="primary alt" title="Capture a region">Select area…</button>

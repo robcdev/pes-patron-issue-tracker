@@ -14,6 +14,8 @@ const HANDLE_KEY = "baseFolder";
 const PENDING_KEY = "pendingCapture";
 // A region capture awaiting Confirm/Cancel in the on-page preview modal.
 const REGION_TEMP_KEY = "pendingRegionTemp";
+// Shots already locked in via "Add screenshot", awaiting Save (an array).
+const COMMITTED_KEY = "committedShots";
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -180,29 +182,54 @@ function networkMarkdown(network) {
 }
 
 /* ------------------------------------------------------------------ *
- * Build the Markdown sidecar Claude reads alongside the screenshot.
- * On a fresh capture, pass `network` (array) to render a table.
- * On edit, pass `captured` and `networkMd` (the preserved section) so
- * that data survives untouched.
+ * Build the Markdown sidecar Claude reads alongside the screenshot(s).
+ * Pass either `pngName` (single image, the common case) or `pngNames`
+ * (array, one or more images from the same issue). `sourceUrls` is an
+ * array parallel to `pngNames` — the page each specific image was
+ * captured from (auto-detected, distinct from the shared/editable `url`
+ * below) — so a reader can tell which screenshot maps to which page.
+ * On a fresh capture, pass `network` (flat array) or `shotNetworks` (array
+ * parallel to `pngNames`, one network-rows-array per image) to render
+ * tables. On edit, pass `captured` and `networkMd` (the previously
+ * rendered section, preserved verbatim) instead.
  * ------------------------------------------------------------------ */
 function buildMetadataMarkdown({
   pngName,
+  pngNames,
+  sourceUrls,
   description,
   prompt,
   url,
   captured,
   network,
+  shotNetworks,
   networkMd,
 }) {
+  const names = pngNames && pngNames.length ? pngNames : pngName ? [pngName] : [];
   const cap = captured || nowStamp();
   const title = (description || "Screenshot").split("\n")[0].slice(0, 80);
-  const lines = [`# Issue: ${title}`, "", `![screenshot](${pngName})`, ""];
+  const lines = [`# Issue: ${title}`, ""];
+  names.forEach((n, i) => {
+    lines.push(names.length > 1 ? `![screenshot ${i + 1}](${n})` : `![screenshot](${n})`);
+    const from = sourceUrls && sourceUrls[i];
+    if (from) lines.push(`**From:** ${from}`);
+    lines.push("");
+  });
   if (description) lines.push(`**Description:** ${description}`, "");
   if (prompt) lines.push(`**Prompt:** ${prompt}`, "");
   if (url) lines.push(`**URL:** ${url}`);
   lines.push(`**Captured:** ${cap}`, "");
-  if (networkMd) lines.push(networkMd.trim(), "");
-  else lines.push(...networkMarkdown(network));
+
+  if (networkMd) {
+    lines.push(networkMd.trim(), "");
+  } else if (shotNetworks && shotNetworks.some((n) => n && n.length)) {
+    // One table per image that actually has network rows, right under it.
+    shotNetworks.forEach((rows) => {
+      if (rows && rows.length) lines.push(...networkMarkdown(rows));
+    });
+  } else {
+    lines.push(...networkMarkdown(network));
+  }
 
   // Machine-readable block for round-trip editing — invisible in rendered
   // Markdown, authoritative when the editor re-opens this sidecar.
@@ -217,8 +244,26 @@ function buildMetadataMarkdown({
  * The rendered `## Network` section is preserved verbatim.
  * ------------------------------------------------------------------ */
 function parseSidecar(md) {
-  const out = { description: "", prompt: "", url: "", captured: "", networkMd: "" };
+  const out = {
+    description: "",
+    prompt: "",
+    url: "",
+    captured: "",
+    networkMd: "",
+    pngNames: [],
+    sourceUrls: [],
+  };
   if (!md) return out;
+
+  // Each image line is optionally followed by its own "**From:** <url>" —
+  // capture both, keeping the arrays aligned by index (empty string when a
+  // given image has no recorded source, e.g. sidecars from before this).
+  const imgRe = /!\[screenshot(?:\s+\d+)?\]\(([^)]+)\)\n(?:\*\*From:\*\* (.*)\n)?/g;
+  let imgMatch;
+  while ((imgMatch = imgRe.exec(md))) {
+    out.pngNames.push(imgMatch[1]);
+    out.sourceUrls.push(imgMatch[2] || "");
+  }
 
   const netIdx = md.indexOf("\n## Network");
   if (netIdx !== -1) {

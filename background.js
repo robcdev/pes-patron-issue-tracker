@@ -62,8 +62,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       try {
         const windowId = sender.tab ? sender.tab.windowId : undefined;
+        const sourceUrl = sender.tab ? sender.tab.url : "";
         const blob = await captureRegion(windowId, msg.rect);
-        await idbSet(REGION_TEMP_KEY, blob); // hold until Confirm/Cancel
+        await idbSet(REGION_TEMP_KEY, { blob, sourceUrl }); // hold until Confirm/Cancel
         const b64 = await blobToBase64(blob);
         sendResponse({ ok: true, b64 });
       } catch (e) {
@@ -76,8 +77,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "stf-confirm") {
     (async () => {
       try {
-        const blob = await idbGet(REGION_TEMP_KEY);
-        if (blob) await idbSet(PENDING_KEY, { blob, source: "area" });
+        const temp = await idbGet(REGION_TEMP_KEY);
+        if (temp && temp.blob) {
+          await idbSet(PENDING_KEY, {
+            blob: temp.blob,
+            source: "area",
+            sourceUrl: temp.sourceUrl || "",
+          });
+        }
         await idbDel(REGION_TEMP_KEY);
         await setBadge(true);
         sendResponse({ ok: true });

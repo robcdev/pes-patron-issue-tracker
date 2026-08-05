@@ -158,7 +158,15 @@ function buildCard(name, objUrl, parsed) {
 async function openEditor(pngName) {
   if (!currentDir) return;
   const mdName = pngName.replace(/\.png$/i, "") + ".md";
-  let parsed = { description: "", prompt: "", url: "", captured: "", networkMd: "" };
+  let parsed = {
+    description: "",
+    prompt: "",
+    url: "",
+    captured: "",
+    networkMd: "",
+    pngNames: [],
+    sourceUrls: [],
+  };
   try {
     parsed = parseSidecar(
       await (await (await currentDir.getFileHandle(mdName)).getFile()).text()
@@ -172,6 +180,12 @@ async function openEditor(pngName) {
     mdName,
     captured: parsed.captured,
     networkMd: parsed.networkMd,
+    // Preserve every image (and its per-image source URL) the sidecar
+    // already references — a capture from the popup's multi-screenshot flow
+    // may list more than just this one; editing text here must not
+    // silently drop them.
+    pngNames: parsed.pngNames && parsed.pngNames.length ? parsed.pngNames : [pngName],
+    sourceUrls: parsed.sourceUrls || [],
   };
 
   els.modalTitle.textContent = pngName;
@@ -206,7 +220,7 @@ function closeEditor() {
 
 async function saveEditor() {
   if (!editCtx || !currentDir) return;
-  const { pngName, mdName, captured, networkMd } = editCtx;
+  const { pngNames, sourceUrls, mdName, captured, networkMd } = editCtx;
   const description = els.mDescription.value.trim();
   const prompt = els.mPrompt.value.trim();
   const url = els.mUrl.value.trim();
@@ -221,7 +235,8 @@ async function saveEditor() {
       }
     } else {
       const md = buildMetadataMarkdown({
-        pngName,
+        pngNames,
+        sourceUrls,
         description,
         prompt,
         url,

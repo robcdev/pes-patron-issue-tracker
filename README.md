@@ -15,15 +15,17 @@ subfolder — no manual "save → find → copy → paste into the worktree" dan
   value is remembered so you don't retype it. Nested subfolders are created
   automatically if they don't exist.
 - **Capture then save.** Both **Take full page** and **Select area…** *capture*
-  a screenshot into a **preview** — nothing is written yet. **Take full page**
-  grabs the visible viewport (`chrome.tabs.captureVisibleTab` — browser
+  a screenshot into a **draft preview** — nothing is written yet. **Take full
+  page** grabs the visible viewport (`chrome.tabs.captureVisibleTab` — browser
   tabs/toolbar are *not* in the image); **Select area…** lets you drag a region
-  on the live page (see [Region capture](#region-capture-select-area)).
-- **Save** writes the previewed screenshot together with the *current* field
-  state (URL, description, mini-prompt, …). The page URL is drawn as a bar across
-  the top and the PNG is written to
-  `‹base folder›/‹subfolder›/‹prefix›-YYYY-MM-DD_HH-MM-SS.png`. **Discard** clears
-  the preview. Re-capturing (either button) replaces the preview.
+  on the live page (see [Region capture](#region-capture-select-area)). Capturing
+  again replaces the draft — click **Add screenshot** first if you want to keep
+  it (see [Multiple screenshots per issue](#multiple-screenshots-per-issue)).
+- **Save** (a standalone button, not part of any single preview) writes every
+  screenshot you've captured — the draft plus anything added — together with the
+  *current* field state (URL, description, mini-prompt, …). The page URL is
+  drawn as a bar across the top of each image. **Discard** clears just the
+  draft; **Clear all screenshots** clears everything.
 
 ## Issue metadata (for Claude)
 
@@ -49,6 +51,7 @@ follows the `![screenshot](…)` link to the image:
 # Issue: the meetings component does not display the time correctly
 
 ![screenshot](meetings-daily-scrum-2026-07-15_10-00-05.png)
+**From:** https://…
 
 **Description:** the meetings component does not display the time correctly
 
@@ -58,26 +61,63 @@ follows the `![screenshot](…)` link to the image:
 **Captured:** 2026-07-15 10:00:05
 ```
 
+The `**From:**` line under each image is the **actual tab URL that screenshot was
+captured from** — auto-detected at capture time, one per image, never edited by
+hand. It's separate from the `**URL:**` field above (which stays a single,
+editable, shared value, same as always) — `**From:**` is what lets Claude tell
+which screenshot maps to which page, especially useful when comparing shots from
+different tabs (see [Multiple screenshots per issue](#multiple-screenshots-per-issue)).
+
 These two fields are **per-issue**: they're cleared after a successful **Save**
 (the subfolder and prefix still persist indefinitely). If both are left blank,
-only the PNG is written.
+only the PNG(s) are written.
 
-Until you Save, though, nothing you type is at risk — see
+Until you Save, though, nothing you type — or capture — is at risk — see
 [Draft persistence](#draft-persistence) below.
+
+### Multiple screenshots per issue
+
+One issue often needs more than one screenshot — e.g. a bug that spans two
+pages, or shots from different browser tabs. **Add screenshot** (shown next to
+the draft preview once you've captured something) locks that draft into a
+running list and clears the slot so **Take full page**/**Select area…** can
+capture the next one. Each item in the list shows a thumbnail and a **Remove**
+link. **Save** (see above) writes the whole list — draft included, so you don't
+have to remember to click Add screenshot for the very last shot.
+
+With more than one screenshot, filenames get an index and all of them share one
+sidecar:
+
+```
+‹subfolder›/meetings-daily-scrum-2026-07-15_10-00-05-1.png
+‹subfolder›/meetings-daily-scrum-2026-07-15_10-00-05-2.png
+‹subfolder›/meetings-daily-scrum-2026-07-15_10-00-05.md
+```
+
+The `.md` embeds every image in order (`![screenshot 1](…)`, `![screenshot
+2](…)`, …), each immediately followed by its own `**From:**` (the page it was
+captured from) and, if network data was captured for that shot, its own
+`## Network` table. **Description** and **Prompt** stay a single shared pair
+covering the whole set — exactly the "look at image 1, then image 2, they
+differ because…" comparison case. With a single screenshot, naming and the
+sidecar are unchanged from before — no `-1` suffix.
+
+Because each capture can come from a **different browser tab**, both the
+already-added list and the current draft persist across tab switches the same
+way the text fields do — see below.
 
 ### Draft persistence
 
 A Chrome extension popup **closes the instant it loses focus** — clicking the
 page, switching tabs, or alt-tabbing away all close it. So that this never costs
-you typed text: the **URL**, **Issue description**, and **Mini-prompt** fields
-are saved to `chrome.storage` on every keystroke and restored exactly as typed
-the next time the popup opens. They're only cleared once you actually click
-**Save** (or **Take full page**/**Select area…** replace an unsaved capture —
-see below). The same applies to a **captured-but-unsaved screenshot**: both the
-full-page and area-selection previews are persisted (IndexedDB for the image,
-`chrome.storage` for any captured network rows), so switching tabs mid-review
-doesn't lose the shot either — reopen the popup and the preview and **Save**
-button are still there.
+you typed text or a captured shot: the **URL**, **Issue description**, and
+**Mini-prompt** fields are saved to `chrome.storage` on every keystroke and
+restored exactly as typed the next time the popup opens — cleared only once you
+actually click **Save**. The current **draft screenshot** and the **list of
+already-added screenshots** are persisted the same way (IndexedDB for the
+images, `chrome.storage` for their network rows), so switching tabs mid-review —
+even between captures of different tabs — never loses anything: reopen the
+popup and everything is exactly where you left it.
 
 ### Network data
 
@@ -113,17 +153,17 @@ A live on-page selection, like macOS ⌘⇧4:
 2. **Drag a rectangle** over the region you want. On release, the live page is
    captured at that moment and a **preview modal** shows the crop with
    **Confirm** / **Cancel**.
-3. **Confirm** stores that region as the pending screenshot. Reopen the
-   extension (its icon shows a badge): the **preview appears above the
-   "Saving to:" path**, with a **Save** button beside it.
-4. **Save** writes it exactly like a full-page shot — URL bar baked on, plus the
-   `.md` sidecar (with any network data captured at selection time) when a
-   description or mini-prompt is present. **Discard** clears the preview, and
-   **Retake area** starts a new selection.
+3. **Confirm** stores that region as the draft screenshot. Reopen the extension
+   (its icon shows a badge): the **preview appears above the "Saving to:" path**.
+4. Click **Save** (below, applies to everything captured) to write it exactly
+   like a full-page shot — URL bar baked on, plus the `.md` sidecar (with any
+   network data captured at selection time) when a description or mini-prompt is
+   present. **Discard** clears just this draft, and **Retake area** starts a new
+   selection in its place.
 
 **Take full page** stays available at all times, so you never have to make a
-selection when you just want the whole viewport — it also fills the preview and
-is written only when you click **Save**.
+selection when you just want the whole viewport — it also fills the draft and is
+written only when you click **Save**.
 
 ### How it works (extension constraints)
 
@@ -157,7 +197,12 @@ grid of previews, each tagged with whether it has details / network data.
 
 Editing round-trips reliably thanks to a small `<!-- stf-meta: … -->` block
 appended to each sidecar — invisible in rendered Markdown, authoritative when the
-editor re-opens the file.
+editor re-opens the file. For a multi-screenshot sidecar (see
+[Multiple screenshots per issue](#multiple-screenshots-per-issue)), editing text
+here preserves every image it already references — but the gallery pairs each
+`.png` with a same-named `.md`, so only the *first* image of the set gets a
+"details" tag; the rest still show up (documented in the shared sidecar, just
+without their own badge here).
 
 The popup and the references page share their code (`lib.js`) and the same stored
 base-folder handle, so no re-picking is needed.

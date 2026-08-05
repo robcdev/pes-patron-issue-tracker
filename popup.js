@@ -156,10 +156,27 @@ els.prefix.addEventListener("input", () => {
   chrome.storage.local.set({ lastPrefix: els.prefix.value });
 });
 
-// Description / mini-prompt are per-issue: they update the preview but are
-// intentionally NOT persisted, and are cleared after a successful capture.
-els.description.addEventListener("input", updatePreview);
-els.miniPrompt.addEventListener("input", updatePreview);
+// URL / description / mini-prompt are persisted as a "draft" on every
+// keystroke so switching tabs (which closes this popup) never loses what
+// was typed. The draft is cleared only after a successful Save.
+function saveDraftFields() {
+  chrome.storage.local.set({
+    draftFields: {
+      url: els.url.value,
+      description: els.description.value,
+      prompt: els.miniPrompt.value,
+    },
+  });
+}
+els.url.addEventListener("input", saveDraftFields);
+els.description.addEventListener("input", () => {
+  updatePreview();
+  saveDraftFields();
+});
+els.miniPrompt.addEventListener("input", () => {
+  updatePreview();
+  saveDraftFields();
+});
 
 // The "include network data" choice is a remembered preference (default off).
 els.includeNetwork.addEventListener("change", () => {
@@ -215,16 +232,12 @@ async function writeShot(baseHandle, blob, network) {
   return { baseName: baseHandle.name, where };
 }
 
-// Make `blob` the pending screenshot: show it in the preview and drop any
-// previously persisted region. Nothing is written until Save.
+// Make `blob` the pending screenshot: show it in the preview and persist it
+// (IDB for the blob, storage for its network rows) so it survives the popup
+// closing when a tab switch steals focus. Nothing is written until Save.
 async function setPending(blob, network, source) {
-  try {
-    await idbDel(PENDING_KEY);
-  } catch (e) {
-    /* ignore */
-  }
-  await chrome.storage.local.remove("pendingFields");
-  chrome.runtime.sendMessage({ type: "stf-clear-badge" }).catch(() => {});
+  await idbSet(PENDING_KEY, { blob, source });
+  await chrome.storage.local.set({ pendingNetwork: network || [] });
   if (regionThumbUrl) URL.revokeObjectURL(regionThumbUrl);
   pendingRegionBlob = blob;
   pendingNetwork = network || [];
@@ -279,6 +292,7 @@ async function saveArea() {
   await clearPendingRegion();
   els.description.value = "";
   els.miniPrompt.value = "";
+  saveDraftFields(); // persist the cleared description/prompt (URL stays)
   updatePreview();
   setStatus(els.cameraStatus, `Saved ✓  ${baseName}/${where}`, "ok");
 }
@@ -289,7 +303,7 @@ async function clearPendingRegion() {
   } catch (e) {
     /* ignore */
   }
-  await chrome.storage.local.remove("pendingFields");
+  await chrome.storage.local.remove("pendingNetwork");
   chrome.runtime.sendMessage({ type: "stf-clear-badge" }).catch(() => {});
   if (regionThumbUrl) URL.revokeObjectURL(regionThumbUrl);
   regionThumbUrl = null;
@@ -354,7 +368,10 @@ els.selectArea.addEventListener("click", async () => {
       return;
     }
 
-    // Best-effort network capture now (page is active), carried to save time.
+    // Best-effort network capture now (page is active). url/description/
+    // mini-prompt/subpath/prefix are already persisted continuously
+    // (see saveDraftFields and the lastSubpath/lastPrefix listeners), so
+    // only the network rows need to be carried across the popup's close.
     let network = [];
     if (els.includeNetwork.checked) {
       try {
@@ -363,20 +380,8 @@ els.selectArea.addEventListener("click", async () => {
         network = [];
       }
     }
-
-    // Persist all fields so they're restored when the popup reopens.
-    await chrome.storage.local.set({
-      pendingFields: {
-        subpath: els.subpath.value,
-        prefix: els.prefix.value,
-        url: els.url.value.trim(),
-        description: els.description.value.trim(),
-        prompt: els.miniPrompt.value.trim(),
-        includeNetwork: els.includeNetwork.checked,
-        network,
-      },
-    });
-    // Start fresh: drop any previously confirmed region.
+    await chrome.storage.local.set({ pendingNetwork: network });
+    // Start fresh: drop any previously confirmed pending capture.
     await idbDel(PENDING_KEY);
 
     await chrome.scripting.executeScript({
@@ -394,34 +399,37 @@ els.selectArea.addEventListener("click", async () => {
  * Init — restore base-folder name and last subpath
  * ------------------------------------------------------------------ */
 (async function init() {
-  const { baseName, lastSubpath, lastPrefix, includeNetwork } =
-    await chrome.storage.local.get([
-      "baseName",
-      "lastSubpath",
-      "lastPrefix",
-      "includeNetwork",
-    ]);
+  const {
+    baseName,
+    lastSubpath,
+    lastPrefix,
+    includeNetwork,
+    draftFields,
+    pendingNetwork: storedNetwork,
+  } = await chrome.storage.local.get([
+    "baseName",
+    "lastSubpath",
+    "lastPrefix",
+    "includeNetwork",
+    "draftFields",
+    "pendingNetwork",
+  ]);
+  chrome.storage.local.remove("pendingFields"); // dead key from an older version
   if (baseName) els.baseDisplay.value = baseName;
   if (lastSubpath) els.subpath.value = lastSubpath;
   if (lastPrefix) els.prefix.value = lastPrefix;
   // Default off when never set; otherwise honour the saved choice.
   els.includeNetwork.checked = includeNetwork === true;
 
-  // If we're returning from a "Select area" round trip, restore every field
-  // exactly as it was and pick up the confirmed region (if any).
-  const { pendingFields } = await chrome.storage.local.get(["pendingFields"]);
-  const pendingRegion = await idbGet(PENDING_KEY);
-
-  if (pendingFields) {
-    els.subpath.value = pendingFields.subpath || "";
-    els.prefix.value = pendingFields.prefix || "";
-    els.url.value = pendingFields.url || "";
-    els.description.value = pendingFields.description || "";
-    els.miniPrompt.value = pendingFields.prompt || "";
-    els.includeNetwork.checked = pendingFields.includeNetwork === true;
-    pendingNetwork = pendingFields.network || [];
+  if (draftFields) {
+    // Restore whatever was typed, even across a tab-switch that closed the
+    // popup — this is the whole point of the draft: never lose it silently.
+    els.url.value = draftFields.url || "";
+    els.description.value = draftFields.description || "";
+    els.miniPrompt.value = draftFields.prompt || "";
   } else {
-    // Auto-detect the current tab's URL (editable). Only when not restoring.
+    // No draft yet (fresh install, or right after a Save cleared it) —
+    // default the URL field to the current tab's address.
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tab && tab.url) els.url.value = tab.url;
@@ -430,15 +438,18 @@ els.selectArea.addEventListener("click", async () => {
     }
   }
 
+  // Pick up a pending (captured-but-unsaved) screenshot, if any — set either
+  // by "Take full page" or by confirming an on-page area selection.
+  const pendingRegion = await idbGet(PENDING_KEY);
   if (pendingRegion && pendingRegion.blob) {
     pendingRegionBlob = pendingRegion.blob;
-    pendingSource = "area";
+    pendingSource = pendingRegion.source || "area";
+    pendingNetwork = storedNetwork || [];
     regionThumbUrl = URL.createObjectURL(pendingRegion.blob);
     els.regionThumb.src = regionThumbUrl;
-  } else if (pendingFields) {
-    // Fields were saved but no region confirmed (cancelled/aborted) — tidy up.
-    await chrome.storage.local.remove("pendingFields");
-    chrome.runtime.sendMessage({ type: "stf-clear-badge" }).catch(() => {});
+  } else if (storedNetwork) {
+    // Leftover from a selection that was cancelled on the page — tidy up.
+    await chrome.storage.local.remove("pendingNetwork");
   }
 
   setMode();

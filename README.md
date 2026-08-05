@@ -58,9 +58,26 @@ follows the `![screenshot](…)` link to the image:
 **Captured:** 2026-07-15 10:00:05
 ```
 
-These two fields are **per-issue**: they're not remembered between captures and are
-cleared after a successful **Save** (the subfolder and prefix still persist). If
-both are left blank, only the PNG is written.
+These two fields are **per-issue**: they're cleared after a successful **Save**
+(the subfolder and prefix still persist indefinitely). If both are left blank,
+only the PNG is written.
+
+Until you Save, though, nothing you type is at risk — see
+[Draft persistence](#draft-persistence) below.
+
+### Draft persistence
+
+A Chrome extension popup **closes the instant it loses focus** — clicking the
+page, switching tabs, or alt-tabbing away all close it. So that this never costs
+you typed text: the **URL**, **Issue description**, and **Mini-prompt** fields
+are saved to `chrome.storage` on every keystroke and restored exactly as typed
+the next time the popup opens. They're only cleared once you actually click
+**Save** (or **Take full page**/**Select area…** replace an unsaved capture —
+see below). The same applies to a **captured-but-unsaved screenshot**: both the
+full-page and area-selection previews are persisted (IndexedDB for the image,
+`chrome.storage` for any captured network rows), so switching tabs mid-review
+doesn't lose the shot either — reopen the popup and the preview and **Save**
+button are still there.
 
 ### Network data
 

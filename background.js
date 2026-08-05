@@ -77,7 +77,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       try {
         const blob = await idbGet(REGION_TEMP_KEY);
-        if (blob) await idbSet(PENDING_KEY, { blob });
+        if (blob) await idbSet(PENDING_KEY, { blob, source: "area" });
         await idbDel(REGION_TEMP_KEY);
         await setBadge(true);
         sendResponse({ ok: true });

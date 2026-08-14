@@ -7,11 +7,8 @@
  * Elements
  * ------------------------------------------------------------------ */
 const els = {
-  tabCamera: document.getElementById("tab-camera"),
   tabEdit: document.getElementById("tab-edit"),
   tabSettings: document.getElementById("tab-settings"),
-  viewCamera: document.getElementById("view-camera"),
-  viewSettings: document.getElementById("view-settings"),
   subpath: document.getElementById("subpath"),
   prefix: document.getElementById("prefix"),
   url: document.getElementById("url"),
@@ -29,11 +26,15 @@ const els = {
   take: document.getElementById("take"),
   selectArea: document.getElementById("select-area"),
   cameraStatus: document.getElementById("camera-status"),
-  baseDisplay: document.getElementById("base-display"),
-  chooseFolder: document.getElementById("choose-folder"),
-  forgetFolder: document.getElementById("forget-folder"),
-  settingsStatus: document.getElementById("settings-status"),
 };
+
+// The base folder's display name (its full path isn't exposed by the File
+// System Access API — that's the point, see README). Settings — including
+// choosing/forgetting the folder — lives in its own tab (settings.html),
+// not in this popup: opening a native OS folder picker can steal focus
+// from the popup and Chrome closes popups the instant they lose focus,
+// silently discarding whatever was mid-flight (observed on Linux/GTK).
+let baseFolderName = "";
 
 function setStatus(el, msg, kind) {
   el.textContent = msg;
@@ -41,19 +42,10 @@ function setStatus(el, msg, kind) {
 }
 
 /* ------------------------------------------------------------------ *
- * View switching (camera / settings). The ✏️ button opens the
- * references manager in its own browser tab instead of a view.
+ * The camera view is the only thing left in the popup itself. ✏️ and ⚙️
+ * both open a full browser tab instead of switching views (see the note
+ * on `baseFolderName` above for why Settings had to move out of here).
  * ------------------------------------------------------------------ */
-function showView(name) {
-  const camera = name === "camera";
-  els.viewCamera.classList.toggle("hidden", !camera);
-  els.viewSettings.classList.toggle("hidden", camera);
-  els.tabCamera.classList.toggle("active", camera);
-  els.tabSettings.classList.toggle("active", !camera);
-}
-els.tabCamera.addEventListener("click", () => showView("camera"));
-els.tabSettings.addEventListener("click", () => showView("settings"));
-
 els.tabEdit.addEventListener("click", () => {
   // Pass the current subfolder so the page opens on the same location.
   const sub = encodeURIComponent(els.subpath.value || "");
@@ -62,12 +54,21 @@ els.tabEdit.addEventListener("click", () => {
   });
 });
 
+els.tabSettings.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
+});
+
+function openSettings(msg) {
+  setStatus(els.cameraStatus, msg, "err");
+  chrome.tabs.create({ url: chrome.runtime.getURL("settings.html") });
+}
+
 function hasMetadata() {
   return Boolean(els.description.value.trim() || els.miniPrompt.value.trim());
 }
 
 function updatePreview() {
-  const base = els.baseDisplay.value || "<base folder>";
+  const base = baseFolderName || "<base folder>";
   const parts = splitSubpath(els.subpath.value);
   const joined = parts.length ? base + "/" + parts.join("/") : base;
   const basename = makeBasename(els.prefix.value);
@@ -122,31 +123,6 @@ async function collectNetworkData() {
   });
   return (results && results[0] && results[0].result) || [];
 }
-
-/* ------------------------------------------------------------------ *
- * Settings: choose / forget folder
- * ------------------------------------------------------------------ */
-els.chooseFolder.addEventListener("click", async () => {
-  try {
-    const handle = await window.showDirectoryPicker({ mode: "readwrite" });
-    await idbSet(HANDLE_KEY, handle);
-    await chrome.storage.local.set({ baseName: handle.name });
-    els.baseDisplay.value = handle.name;
-    updatePreview();
-    setStatus(els.settingsStatus, `Base folder set: ${handle.name}`, "ok");
-  } catch (e) {
-    if (e && e.name === "AbortError") return; // user cancelled picker
-    setStatus(els.settingsStatus, "Could not set folder: " + e.message, "err");
-  }
-});
-
-els.forgetFolder.addEventListener("click", async () => {
-  await idbDel(HANDLE_KEY);
-  await chrome.storage.local.remove("baseName");
-  els.baseDisplay.value = "";
-  updatePreview();
-  setStatus(els.settingsStatus, "Folder forgotten.", "info");
-});
 
 /* ------------------------------------------------------------------ *
  * Camera: field listeners + take screenshot
@@ -370,8 +346,7 @@ async function saveAll() {
 
   const baseHandle = await idbGet(HANDLE_KEY);
   if (!baseHandle) {
-    setStatus(els.cameraStatus, "No base folder set. Open ⚙️ Settings first.", "err");
-    showView("settings");
+    openSettings("No base folder set. Opening ⚙️ Settings…");
     return;
   }
   if (!(await ensurePermission(baseHandle))) {
@@ -517,8 +492,7 @@ els.selectArea.addEventListener("click", async () => {
   try {
     const baseHandle = await idbGet(HANDLE_KEY);
     if (!baseHandle) {
-      setStatus(els.cameraStatus, "No base folder set. Open ⚙️ Settings first.", "err");
-      showView("settings");
+      openSettings("No base folder set. Opening ⚙️ Settings…");
       els.selectArea.disabled = false;
       return;
     }
@@ -578,7 +552,7 @@ els.selectArea.addEventListener("click", async () => {
     "pendingNetwork",
   ]);
   chrome.storage.local.remove("pendingFields"); // dead key from an older version
-  if (baseName) els.baseDisplay.value = baseName;
+  baseFolderName = baseName || "";
   if (lastSubpath) els.subpath.value = lastSubpath;
   if (lastPrefix) els.prefix.value = lastPrefix;
   // Default off when never set; otherwise honour the saved choice.
@@ -632,5 +606,4 @@ els.selectArea.addEventListener("click", async () => {
 
   setMode();
   updatePreview();
-  showView("camera");
 })();

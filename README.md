@@ -6,10 +6,11 @@ subfolder — no manual "save → find → copy → paste into the worktree" dan
 
 ## How it works
 
-- **Settings (⚙️)** — pick a **base folder** *once* via the OS folder dialog.
-  The choice is remembered across browser restarts (stored as a
-  `FileSystemDirectoryHandle` in IndexedDB). This is your stable root, e.g.
-  `/Users/roberth/Documents/dev/spaceti`.
+- **Settings (⚙️)** — opens `settings.html` in its own browser tab (see
+  [Settings runs in its own tab](#settings-runs-in-its-own-tab) for why) where
+  you pick a **base folder** *once* via the OS folder dialog. The choice is
+  remembered across browser restarts (stored as a `FileSystemDirectoryHandle`
+  in IndexedDB). This is your stable root, e.g. `/Users/roberth/Documents/dev/spaceti`.
 - **Camera (📷)** — a **subfolder** field (e.g. `worktree-x/reference`) plus the
   capture/save buttons. The subfolder is the part you change often; its last
   value is remembered so you don't retype it. Nested subfolders are created
@@ -206,6 +207,24 @@ without their own badge here).
 
 The popup and the references page share their code (`lib.js`) and the same stored
 base-folder handle, so no re-picking is needed.
+
+## Settings runs in its own tab
+
+Like the references page, **⚙️ Settings** opens as a real browser tab
+(`settings.html`), not a view inside the popup. This isn't just consistency for
+its own sake — it fixes a real cross-platform bug:
+
+Choosing a base folder calls `window.showDirectoryPicker()`, which opens the
+OS's **native** folder dialog. A Chrome extension **popup closes the instant it
+loses focus** (that's also why [region capture](#region-capture-select-area)
+needs a background worker). On macOS, the native picker behaves like an
+attached sheet and doesn't blur the invoking popup — so keeping "Settings"
+inside the popup happened to work there. On Linux (GTK's file chooser is a
+separate top-level window), opening the picker **does** blur the popup, Chrome
+closes it immediately, and the whole `await window.showDirectoryPicker()` call
+gets abandoned mid-flight — the folder you picked is silently lost, and the
+field never updates. A plain tab doesn't have this failure mode, so the picker
+now works the same way on every platform.
 
 ## Why pick-a-folder instead of typing a path
 

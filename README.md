@@ -31,8 +31,15 @@ subfolder — no manual "save → find → copy → paste into the worktree" dan
 ## Issue metadata (for Claude)
 
 The camera tab has a **URL** field that auto-populates with the current tab's
-address when the popup opens. It's editable, and its value is used both for the
-URL bar baked into the image and for the `url` line in the sidecar below.
+address **every time the popup opens** — open it on `ddd.com` and the field
+reads `ddd.com`. It's editable, and its value is used both for the URL bar baked
+into the image and for the `url` line in the sidecar below.
+
+Typing in the field **pins** what you typed: the auto-fill stops overwriting it,
+including across the tab switches described under *Draft persistence* below.
+Emptying the field releases the pin and hands it back to the auto-fill, and so
+does a successful **Save** — that ends the capture cycle, so the next one starts
+from wherever the browser actually is.
 
 The tab also has two optional fields — **Issue description** and
 **Mini-prompt for Claude** (the "issue" can be a bug *or* a feature request).
@@ -97,8 +104,8 @@ sidecar:
 
 The `.md` embeds every image in order (`![screenshot 1](…)`, `![screenshot
 2](…)`, …), each immediately followed by its own `**From:**` (the page it was
-captured from) and, if network data was captured for that shot, its own
-`## Network` table. **Description** and **Prompt** stay a single shared pair
+captured from) and, if network/console data was captured for that shot, its own
+`## Network` table and `## Console` block. **Description** and **Prompt** stay a single shared pair
 covering the whole set — exactly the "look at image 1, then image 2, they
 differ because…" comparison case. With a single screenshot, naming and the
 sidecar are unchanged from before — no `-1` suffix.
@@ -114,9 +121,10 @@ page, switching tabs, or alt-tabbing away all close it. So that this never costs
 you typed text or a captured shot: the **URL**, **Issue description**, and
 **Mini-prompt** fields are saved to `chrome.storage` on every keystroke and
 restored exactly as typed the next time the popup opens — cleared only once you
-actually click **Save**. The current **draft screenshot** and the **list of
+actually click **Save**. (The URL is restored only if you typed it by hand;
+otherwise it re-reads the current tab — see *Issue metadata* above.) The current **draft screenshot** and the **list of
 already-added screenshots** are persisted the same way (IndexedDB for the
-images, `chrome.storage` for their network rows), so switching tabs mid-review —
+images, `chrome.storage` for their network/console rows), so switching tabs mid-review —
 even between captures of different tabs — never loses anything: reopen the
 popup and everything is exactly where you left it.
 
@@ -144,6 +152,47 @@ made since the current page load; and the network capture is best-effort — if 
 fails, the screenshot and the rest of the sidecar are still saved. The table is
 capped at 200 rows.
 
+### Console data
+
+Check the **Include console data** checkbox (off by default) to add a `##
+Console` block to the sidecar with everything the page logged — `log`, `info`,
+`warn`, `error`, `debug`, plus uncaught errors and unhandled promise rejections
+— each with a timestamp and level. Your choice is remembered.
+
+````markdown
+## Console (12 messages, 2 errors)
+
+```text
+[10:00:03.118] LOG   [MeetingList] rendering 14 rows
+[10:00:03.402] ERROR Uncaught TypeError: t.format is not a function
+    at formatTime (meetings.js:212)
+```
+````
+
+Unlike network data — which the browser records for us and hands over on demand
+— **nothing keeps a console history**, so the extension has to be listening
+before the message is logged. `console-hook.js` runs in the page's *main world*
+at `document_start` (declared in the manifest) and wraps `console.*` into a
+capped in-page ring buffer, which the popup reads at capture time.
+
+The practical consequence: **a tab that was already open when the extension was
+installed or reloaded has no recording at all.** Rather than silently attaching
+an empty log, the popup says so and asks you to reload the page — when you tick
+the checkbox, when you take a full-page shot, and before it opens the area
+selector. It buffers the most recent 500 messages (each truncated at 2 000
+characters); the sidecar renders the last 200. Message arguments are formatted
+much like DevTools does: `Error`s become their stack, objects are JSON, circular
+references show as `[Circular]`.
+
+Because the recorder must run on every page, the extension declares
+`host_permissions: <all_urls>` — Chrome shows this at install as *"Read and
+change all your data on all websites"*. It only wraps `console.*` and reads back
+what the page itself logged; nothing is sent anywhere.
+
+If either box is ticked and data is captured, the sidecar is written **even when
+you leave the description and mini-prompt empty** — a log you can't retype is
+worth a file on its own.
+
 ## Region capture (Select area…)
 
 A live on-page selection, like macOS ⌘⇧4:
@@ -158,8 +207,8 @@ A live on-page selection, like macOS ⌘⇧4:
    (its icon shows a badge): the **preview appears above the "Saving to:" path**.
 4. Click **Save** (below, applies to everything captured) to write it exactly
    like a full-page shot — URL bar baked on, plus the `.md` sidecar (with any
-   network data captured at selection time) when a description or mini-prompt is
-   present. **Discard** clears just this draft, and **Retake area** starts a new
+   network/console data captured at selection time) when a description or
+   mini-prompt is present — or whenever there's captured data to keep. **Discard** clears just this draft, and **Retake area** starts a new
    selection in its place.
 
 **Take full page** stays available at all times, so you never have to make a
@@ -183,15 +232,17 @@ reliably write to your chosen folder — so the work is split:
 
 The **✏️** button in the popup opens a full **references page in its own browser
 tab** (`references.html`). It shows every screenshot in a folder as a responsive
-grid of previews, each tagged with whether it has details / network data.
+grid of previews, each tagged with whether it has details / network / console
+data.
 
 - The page opens on the popup's current **subfolder**; you can type a different
   subfolder in the header bar and hit **Load** (or Enter) to browse elsewhere
   under the same base folder, and **Refresh** to re-scan.
 - **Click any card** to open the editor: a large preview beside the editable
   fields (URL, issue description, mini-prompt). **Save** rewrites the `.md`
-  sidecar in place — any captured `## Network` section is preserved untouched,
-  and clearing all fields removes the sidecar. **Delete reference** removes the
+  sidecar in place — any captured `## Network` / `## Console` section is
+  preserved untouched, and clearing all fields removes the sidecar (unless it
+  still holds captured data). **Delete reference** removes the
   screenshot *and* its `.md` sidecar together (after a confirmation).
 - The first time the page opens after a browser restart it asks you to **Grant
   folder access** (Chrome re-confirming read/write to the chosen folder).

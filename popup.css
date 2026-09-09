@@ -156,12 +156,16 @@ button.primary:disabled { background: #b9b9c9; cursor: default; }
 #clear-all {
   display: block;
   text-align: center;
-  margin: 10px auto;
-  padding-bottom: 10px;
-  border-bottom: 1px dashed #e3e5ee;
+  margin: 10px auto 0;
 }
 
-.button-row { display: flex; gap: 8px; }
+.button-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #e3e5ee;
+}
 .button-row .primary { flex: 1; }
 button.primary.alt {
   background: #eef0fb;

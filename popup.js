@@ -15,6 +15,7 @@ const els = {
   description: document.getElementById("description"),
   miniPrompt: document.getElementById("mini-prompt"),
   includeNetwork: document.getElementById("include-network"),
+  includeConsole: document.getElementById("include-console"),
   targetPreview: document.getElementById("target-preview"),
   committedList: document.getElementById("committed-list"),
   regionPreview: document.getElementById("region-preview"),
@@ -125,6 +126,41 @@ async function collectNetworkData() {
 }
 
 /* ------------------------------------------------------------------ *
+ * Collect the console messages recorded by console-hook.js, which runs in
+ * the page's MAIN world from document_start. Returns null (not []) when the
+ * hook isn't there — a tab that was already open when the extension was
+ * installed/reloaded has no buffer at all, and the caller tells the user to
+ * reload rather than silently attaching an empty log.
+ * ------------------------------------------------------------------ */
+async function collectConsoleData() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || tab.id == null) return null;
+
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: "MAIN",
+    func: () => (window.__stfConsole ? window.__stfConsole.slice() : null),
+  });
+  const rows = results && results[0] ? results[0].result : null;
+  return rows || null;
+}
+
+// Wraps collectConsoleData with the "checkbox off / not hooked" handling both
+// capture paths need: returns the rows plus whether the recorder was present.
+async function consoleForCapture() {
+  if (!els.includeConsole.checked) return { rows: [], hooked: true };
+  try {
+    const rows = await collectConsoleData();
+    return { rows: rows || [], hooked: rows !== null };
+  } catch (e) {
+    return { rows: [], hooked: false };
+  }
+}
+
+const CONSOLE_RELOAD_HINT =
+  " (No console log yet — reload the page so it can be recorded from the start.)";
+
+/* ------------------------------------------------------------------ *
  * Camera: field listeners + take screenshot
  * ------------------------------------------------------------------ */
 els.subpath.addEventListener("input", () => {
@@ -140,16 +176,28 @@ els.prefix.addEventListener("input", () => {
 // URL / description / mini-prompt are persisted as a "draft" on every
 // keystroke so switching tabs (which closes this popup) never loses what
 // was typed. The draft is cleared only after a successful Save.
+// The URL field defaults to the active tab's address every time the popup
+// opens. Typing in it flips `urlManual`, which pins whatever was typed and
+// stops the auto-fill from overwriting it; emptying the field releases the
+// pin and hands the field back to the auto-fill. A successful Save also
+// releases it — that ends the capture cycle, so the next one starts from
+// wherever the browser actually is.
+let urlManual = false;
+
 function saveDraftFields() {
   chrome.storage.local.set({
     draftFields: {
       url: els.url.value,
       description: els.description.value,
       prompt: els.miniPrompt.value,
+      urlManual,
     },
   });
 }
-els.url.addEventListener("input", saveDraftFields);
+els.url.addEventListener("input", () => {
+  urlManual = els.url.value.trim() !== "";
+  saveDraftFields();
+});
 els.description.addEventListener("input", () => {
   updatePreview();
   saveDraftFields();
@@ -164,6 +212,26 @@ els.includeNetwork.addEventListener("change", () => {
   chrome.storage.local.set({ includeNetwork: els.includeNetwork.checked });
 });
 
+// Same for "include console data".
+els.includeConsole.addEventListener("change", async () => {
+  chrome.storage.local.set({ includeConsole: els.includeConsole.checked });
+  // Warn straight away if this tab predates the recorder, rather than at
+  // save time when the moment worth capturing has already passed.
+  if (els.includeConsole.checked) {
+    try {
+      if ((await collectConsoleData()) === null) {
+        setStatus(
+          els.cameraStatus,
+          "Console recording isn't active on this tab — reload the page to capture its log.",
+          "err"
+        );
+      }
+    } catch (e) {
+      /* best-effort hint only */
+    }
+  }
+});
+
 // The current draft: a captured-but-uncommitted screenshot (its blob,
 // preview URL, network rows, where it came from — "area" | "full" — and
 // the actual tab URL it was captured from, auto-detected, distinct from
@@ -173,11 +241,12 @@ els.includeNetwork.addEventListener("change", () => {
 let pendingRegionBlob = null;
 let regionThumbUrl = null;
 let pendingNetwork = [];
+let pendingConsole = [];
 let pendingSource = null;
 let pendingSourceUrl = "";
 
 // Screenshots already locked in via "Add screenshot", awaiting Save.
-// Each entry: { blob, source, network, sourceUrl, thumbUrl }. Persisted
+// Each entry: { blob, source, network, console, sourceUrl, thumbUrl }. Persisted
 // (minus thumbUrl) so the list survives the popup closing on a tab switch.
 let committedShots = [];
 
@@ -224,10 +293,11 @@ async function persistCommitted() {
   if (committedShots.length) {
     await idbSet(
       COMMITTED_KEY,
-      committedShots.map(({ blob, source, network, sourceUrl }) => ({
+      committedShots.map(({ blob, source, network, consoleLogs, sourceUrl }) => ({
         blob,
         source,
         network,
+        consoleLogs,
         sourceUrl,
       }))
     );
@@ -257,6 +327,7 @@ async function commitDraft() {
     blob: pendingRegionBlob,
     source: pendingSource,
     network: pendingNetwork,
+    consoleLogs: pendingConsole,
     sourceUrl: pendingSourceUrl,
     thumbUrl: regionThumbUrl, // ownership moves here — don't revoke below
   });
@@ -267,10 +338,11 @@ async function commitDraft() {
   } catch (e) {
     /* ignore */
   }
-  await chrome.storage.local.remove("pendingNetwork");
+  await chrome.storage.local.remove(["pendingNetwork", "pendingConsole"]);
   chrome.runtime.sendMessage({ type: "stf-clear-badge" }).catch(() => {});
   pendingRegionBlob = null;
   pendingNetwork = [];
+  pendingConsole = [];
   pendingSource = null;
   pendingSourceUrl = "";
   regionThumbUrl = null; // now owned by the committed entry above
@@ -284,12 +356,16 @@ async function commitDraft() {
 // Make `blob` the current draft: show it in the preview and persist it
 // (IDB for the blob, storage for its network rows) so it survives the popup
 // closing when a tab switch steals focus. Nothing is written until Save.
-async function setPending(blob, network, source, sourceUrl) {
+async function setPending(blob, network, consoleLogs, source, sourceUrl) {
   await idbSet(PENDING_KEY, { blob, source, sourceUrl: sourceUrl || "" });
-  await chrome.storage.local.set({ pendingNetwork: network || [] });
+  await chrome.storage.local.set({
+    pendingNetwork: network || [],
+    pendingConsole: consoleLogs || [],
+  });
   if (regionThumbUrl) URL.revokeObjectURL(regionThumbUrl);
   pendingRegionBlob = blob;
   pendingNetwork = network || [];
+  pendingConsole = consoleLogs || [];
   pendingSource = source;
   pendingSourceUrl = sourceUrl || "";
   regionThumbUrl = URL.createObjectURL(blob);
@@ -309,8 +385,13 @@ async function captureFullPage() {
       network = [];
     }
   }
-  await setPending(blob, network, "full", sourceUrl);
-  setStatus(els.cameraStatus, "Full page captured — review and click Save.", "info");
+  const { rows: consoleLogs, hooked } = await consoleForCapture();
+  await setPending(blob, network, consoleLogs, "full", sourceUrl);
+  setStatus(
+    els.cameraStatus,
+    "Full page captured — review and click Save." + (hooked ? "" : CONSOLE_RELOAD_HINT),
+    hooked ? "info" : "err"
+  );
 }
 
 // Bake the URL bar onto a screenshot blob and return the final PNG blob.
@@ -334,10 +415,16 @@ async function saveAll() {
   const shots = committedShots.map((s) => ({
     thumbUrl: s.thumbUrl,
     network: s.network,
+    consoleLogs: s.consoleLogs,
     sourceUrl: s.sourceUrl,
   }));
   if (pendingRegionBlob) {
-    shots.push({ thumbUrl: regionThumbUrl, network: pendingNetwork, sourceUrl: pendingSourceUrl });
+    shots.push({
+      thumbUrl: regionThumbUrl,
+      network: pendingNetwork,
+      consoleLogs: pendingConsole,
+      sourceUrl: pendingSourceUrl,
+    });
   }
   if (!shots.length) {
     setStatus(els.cameraStatus, "Nothing to save — capture a screenshot first.", "err");
@@ -359,6 +446,7 @@ async function saveAll() {
   const multi = shots.length > 1;
   const pngNames = [];
   const shotNetworks = [];
+  const shotConsoles = [];
   const sourceUrls = [];
 
   for (let i = 0; i < shots.length; i++) {
@@ -367,18 +455,22 @@ async function saveAll() {
     await writeInto(baseHandle, els.subpath.value, finalBlob, filename);
     pngNames.push(filename);
     shotNetworks.push(shots[i].network || []);
+    shotConsoles.push(shots[i].consoleLogs || []);
     sourceUrls.push(shots[i].sourceUrl || "");
   }
 
   const description = els.description.value.trim();
   const prompt = els.miniPrompt.value.trim();
+  const hasCaptureData =
+    shotNetworks.some((n) => n && n.length) || shotConsoles.some((c) => c && c.length);
   let savedNote = pngNames.join(" + ");
-  if (description || prompt) {
+  if (description || prompt || hasCaptureData) {
     const mdName = basename + ".md";
     const md = buildMetadataMarkdown({
       pngNames,
       sourceUrls,
       shotNetworks,
+      shotConsoles,
       description,
       prompt,
       url,
@@ -395,7 +487,10 @@ async function saveAll() {
   await clearAllShots();
   els.description.value = "";
   els.miniPrompt.value = "";
-  saveDraftFields(); // persist the cleared description/prompt (URL stays)
+  // The capture cycle is over: hand the URL field back to the auto-fill so
+  // the next open reflects wherever the browser actually is.
+  urlManual = false;
+  saveDraftFields();
   updatePreview();
   const parts = splitSubpath(els.subpath.value);
   const where = (parts.length ? parts.join("/") + "/" : "") + savedNote;
@@ -409,12 +504,13 @@ async function clearPendingRegion() {
   } catch (e) {
     /* ignore */
   }
-  await chrome.storage.local.remove("pendingNetwork");
+  await chrome.storage.local.remove(["pendingNetwork", "pendingConsole"]);
   chrome.runtime.sendMessage({ type: "stf-clear-badge" }).catch(() => {});
   if (regionThumbUrl) URL.revokeObjectURL(regionThumbUrl);
   regionThumbUrl = null;
   pendingRegionBlob = null;
   pendingNetwork = [];
+  pendingConsole = [];
   pendingSource = null;
   pendingSourceUrl = "";
   setMode();
@@ -508,7 +604,7 @@ els.selectArea.addEventListener("click", async () => {
     // Best-effort network capture now (page is active). url/description/
     // mini-prompt/subpath/prefix are already persisted continuously
     // (see saveDraftFields and the lastSubpath/lastPrefix listeners), so
-    // only the network rows need to be carried across the popup's close.
+    // only the network/console rows need to be carried across the close.
     let network = [];
     if (els.includeNetwork.checked) {
       try {
@@ -517,7 +613,20 @@ els.selectArea.addEventListener("click", async () => {
         network = [];
       }
     }
-    await chrome.storage.local.set({ pendingNetwork: network });
+    const { rows: consoleLogs, hooked } = await consoleForCapture();
+    if (!hooked) {
+      setStatus(
+        els.cameraStatus,
+        "Console recording isn't active on this tab — reload the page to capture its log.",
+        "err"
+      );
+      els.selectArea.disabled = false;
+      return;
+    }
+    await chrome.storage.local.set({
+      pendingNetwork: network,
+      pendingConsole: consoleLogs,
+    });
     // Start fresh: drop any previously confirmed pending capture.
     await idbDel(PENDING_KEY);
 
@@ -541,15 +650,19 @@ els.selectArea.addEventListener("click", async () => {
     lastSubpath,
     lastPrefix,
     includeNetwork,
+    includeConsole,
     draftFields,
     pendingNetwork: storedNetwork,
+    pendingConsole: storedConsole,
   } = await chrome.storage.local.get([
     "baseName",
     "lastSubpath",
     "lastPrefix",
     "includeNetwork",
+    "includeConsole",
     "draftFields",
     "pendingNetwork",
+    "pendingConsole",
   ]);
   chrome.storage.local.remove("pendingFields"); // dead key from an older version
   baseFolderName = baseName || "";
@@ -557,6 +670,7 @@ els.selectArea.addEventListener("click", async () => {
   if (lastPrefix) els.prefix.value = lastPrefix;
   // Default off when never set; otherwise honour the saved choice.
   els.includeNetwork.checked = includeNetwork === true;
+  els.includeConsole.checked = includeConsole === true;
 
   if (draftFields) {
     // Restore whatever was typed, even across a tab-switch that closed the
@@ -564,14 +678,20 @@ els.selectArea.addEventListener("click", async () => {
     els.url.value = draftFields.url || "";
     els.description.value = draftFields.description || "";
     els.miniPrompt.value = draftFields.prompt || "";
-  } else {
-    // No draft yet (fresh install, or right after a Save cleared it) —
-    // default the URL field to the current tab's address.
+    urlManual = draftFields.urlManual === true && Boolean(draftFields.url);
+  }
+
+  // Unless the URL was typed by hand, it always shows the tab the popup was
+  // opened on — open it on ddd.com and the field reads ddd.com, every time.
+  if (!urlManual) {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab && tab.url) els.url.value = tab.url;
+      if (tab && tab.url) {
+        els.url.value = tab.url;
+        saveDraftFields();
+      }
     } catch (e) {
-      /* leave the field blank if the tab can't be read */
+      /* leave whatever's there if the tab can't be read */
     }
   }
 
@@ -583,11 +703,12 @@ els.selectArea.addEventListener("click", async () => {
     pendingSource = pendingRegion.source || "area";
     pendingSourceUrl = pendingRegion.sourceUrl || "";
     pendingNetwork = storedNetwork || [];
+    pendingConsole = storedConsole || [];
     regionThumbUrl = URL.createObjectURL(pendingRegion.blob);
     els.regionThumb.src = regionThumbUrl;
-  } else if (storedNetwork) {
+  } else if (storedNetwork || storedConsole) {
     // Leftover from a selection that was cancelled on the page — tidy up.
-    await chrome.storage.local.remove("pendingNetwork");
+    await chrome.storage.local.remove(["pendingNetwork", "pendingConsole"]);
   }
 
   // Restore any screenshots already locked in via "Add screenshot" —
@@ -598,6 +719,7 @@ els.selectArea.addEventListener("click", async () => {
       blob: s.blob,
       source: s.source,
       network: s.network || [],
+      consoleLogs: s.consoleLogs || [],
       sourceUrl: s.sourceUrl || "",
       thumbUrl: URL.createObjectURL(s.blob),
     }));

@@ -181,6 +181,55 @@ function networkMarkdown(network) {
   return lines;
 }
 
+/* ---- Console log rendering ---- */
+// Keep the sidecar from ballooning on chatty pages.
+const MAX_CONSOLE_ROWS = 200;
+
+function fmtLogTime(ts) {
+  if (!ts) return "--:--:--";
+  const d = new Date(ts);
+  const p = (n, w) => String(n).padStart(w || 2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(
+    d.getMilliseconds(),
+    3
+  )}`;
+}
+
+// Rendered as a fenced block rather than a table: log messages are often
+// multi-line (stack traces) and would shred a Markdown table.
+function consoleMarkdown(logs) {
+  if (!logs || !logs.length) return [];
+  const rows = logs.slice(-MAX_CONSOLE_ROWS);
+  const errors = logs.filter((r) => r.level === "error").length;
+  const warns = logs.filter((r) => r.level === "warn").length;
+  const counts = [
+    errors ? `${errors} error${errors === 1 ? "" : "s"}` : "",
+    warns ? `${warns} warning${warns === 1 ? "" : "s"}` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  const lines = [
+    `## Console (${logs.length} message${logs.length === 1 ? "" : "s"}${
+      counts ? `, ${counts}` : ""
+    })`,
+    "",
+  ];
+  if (logs.length > rows.length) {
+    lines.push(
+      `_Showing the last ${rows.length} of ${logs.length} messages._`,
+      ""
+    );
+  }
+  lines.push("```text");
+  for (const r of rows) {
+    const level = String(r.level || "log").toUpperCase().padEnd(5);
+    lines.push(`[${fmtLogTime(r.ts)}] ${level} ${r.text || ""}`);
+  }
+  lines.push("```", "");
+  return lines;
+}
+
 /* ------------------------------------------------------------------ *
  * Build the Markdown sidecar Claude reads alongside the screenshot(s).
  * Pass either `pngName` (single image, the common case) or `pngNames`
@@ -204,6 +253,9 @@ function buildMetadataMarkdown({
   network,
   shotNetworks,
   networkMd,
+  consoleLogs,
+  shotConsoles,
+  consoleMd,
 }) {
   const names = pngNames && pngNames.length ? pngNames : pngName ? [pngName] : [];
   const cap = captured || nowStamp();
@@ -231,11 +283,35 @@ function buildMetadataMarkdown({
     lines.push(...networkMarkdown(network));
   }
 
+  if (consoleMd) {
+    lines.push(consoleMd.trim(), "");
+  } else if (shotConsoles && shotConsoles.some((c) => c && c.length)) {
+    shotConsoles.forEach((rows) => {
+      if (rows && rows.length) lines.push(...consoleMarkdown(rows));
+    });
+  } else {
+    lines.push(...consoleMarkdown(consoleLogs));
+  }
+
   // Machine-readable block for round-trip editing — invisible in rendered
   // Markdown, authoritative when the editor re-opens this sidecar.
   const meta = { v: 1, description, prompt, url, captured: cap };
   lines.push(`<!-- stf-meta: ${JSON.stringify(meta)} -->`, "");
   return lines.join("\n");
+}
+
+/* ------------------------------------------------------------------ *
+ * Pull every "## <heading>" block (there may be one per screenshot) out of
+ * a sidecar, verbatim. Stops at the next top-level "## " of a *different*
+ * kind and at the machine-readable stf-meta comment, so the Network and
+ * Console sections never swallow each other.
+ * ------------------------------------------------------------------ */
+function extractSection(md, heading) {
+  const body = md.split("<!-- stf-meta:")[0];
+  // Split on every "## " heading, keeping the heading with its block.
+  const chunks = body.split(/\n(?=## )/g);
+  const wanted = chunks.filter((c) => c.startsWith("## " + heading));
+  return wanted.length ? wanted.join("\n\n").trim() : "";
 }
 
 /* ------------------------------------------------------------------ *
@@ -250,6 +326,7 @@ function parseSidecar(md) {
     url: "",
     captured: "",
     networkMd: "",
+    consoleMd: "",
     pngNames: [],
     sourceUrls: [],
   };
@@ -265,13 +342,8 @@ function parseSidecar(md) {
     out.sourceUrls.push(imgMatch[2] || "");
   }
 
-  const netIdx = md.indexOf("\n## Network");
-  if (netIdx !== -1) {
-    let net = md.slice(netIdx).trim();
-    const mIdx = net.indexOf("<!-- stf-meta:");
-    if (mIdx !== -1) net = net.slice(0, mIdx).trim();
-    out.networkMd = net;
-  }
+  out.networkMd = extractSection(md, "Network");
+  out.consoleMd = extractSection(md, "Console");
 
   const meta = md.match(/<!-- stf-meta:\s*([\s\S]*?)\s*-->/);
   if (meta) {

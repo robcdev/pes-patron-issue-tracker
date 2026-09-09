@@ -146,6 +146,12 @@ function buildCard(name, objUrl, parsed) {
     net.textContent = "network";
     tags.append(net);
   }
+  if (parsed && parsed.consoleMd) {
+    const con = document.createElement("span");
+    con.className = "tag";
+    con.textContent = "console";
+    tags.append(con);
+  }
 
   body.append(nameEl, desc, tags);
   card.append(img, body);
@@ -164,6 +170,7 @@ async function openEditor(pngName) {
     url: "",
     captured: "",
     networkMd: "",
+    consoleMd: "",
     pngNames: [],
     sourceUrls: [],
   };
@@ -180,6 +187,7 @@ async function openEditor(pngName) {
     mdName,
     captured: parsed.captured,
     networkMd: parsed.networkMd,
+    consoleMd: parsed.consoleMd,
     // Preserve every image (and its per-image source URL) the sidecar
     // already references — a capture from the popup's multi-screenshot flow
     // may list more than just this one; editing text here must not
@@ -201,8 +209,12 @@ async function openEditor(pngName) {
   els.mUrl.value = parsed.url;
   els.mDescription.value = parsed.description;
   els.mPrompt.value = parsed.prompt;
-  els.modalNetwork.textContent = parsed.networkMd
-    ? "Captured network data is attached and will be preserved when you save."
+  const attached = [
+    parsed.networkMd ? "network" : "",
+    parsed.consoleMd ? "console" : "",
+  ].filter(Boolean);
+  els.modalNetwork.textContent = attached.length
+    ? `Captured ${attached.join(" and ")} data is attached and will be preserved when you save.`
     : "";
   setModalStatus("", "");
   els.modal.classList.remove("hidden");
@@ -220,14 +232,16 @@ function closeEditor() {
 
 async function saveEditor() {
   if (!editCtx || !currentDir) return;
-  const { pngNames, sourceUrls, mdName, captured, networkMd } = editCtx;
+  const { pngNames, sourceUrls, mdName, captured, networkMd, consoleMd } = editCtx;
   const description = els.mDescription.value.trim();
   const prompt = els.mPrompt.value.trim();
   const url = els.mUrl.value.trim();
 
   try {
-    if (!description && !prompt && !url) {
-      // Nothing left to store — drop the sidecar if one exists.
+    if (!description && !prompt && !url && !networkMd && !consoleMd) {
+      // Nothing left to store — drop the sidecar if one exists. Captured
+      // network/console data counts as content: it can't be retyped, so
+      // clearing the text fields must not take it down with them.
       try {
         await currentDir.removeEntry(mdName);
       } catch (e) {
@@ -242,6 +256,7 @@ async function saveEditor() {
         url,
         captured,
         networkMd,
+        consoleMd,
       });
       const fh = await currentDir.getFileHandle(mdName, { create: true });
       const w = await fh.createWritable();
